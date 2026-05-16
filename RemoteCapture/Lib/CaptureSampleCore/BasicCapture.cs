@@ -11,6 +11,17 @@ using Windows.UI.Composition;
 
 namespace RemoteCapture.Lib.CaptureSampleCore
 {
+    /// <summary>
+    /// キャプチャされたフレームデータを格納するクラス
+    /// </summary>
+    public class CapturedFrameEventArgs : EventArgs
+    {
+        public byte[] PixelData { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public DateTime Timestamp { get; set; }
+    }
+
     internal class BasicCapture : IDisposable
     {
         private GraphicsCaptureItem _item;
@@ -21,6 +32,11 @@ namespace RemoteCapture.Lib.CaptureSampleCore
         private IDirect3DDevice _device;
         private SharpDX.Direct3D11.Device _d3dDevice;
         private SharpDX.DXGI.SwapChain1 _swapChain;
+
+        /// <summary>
+        /// キャプチャされたフレームデータが利用可能になったときに発生するイベント
+        /// </summary>
+        public event EventHandler<CapturedFrameEventArgs> FrameDataAvailable;
 
         public BasicCapture(IDirect3DDevice device, GraphicsCaptureItem item)
         {
@@ -88,6 +104,30 @@ namespace RemoteCapture.Lib.CaptureSampleCore
                 using (var bitmap = Direct3D11Helper.CreateSharpDXTexture2D(frame.Surface))
                 {
                     _d3dDevice.ImmediateContext.CopyResource(bitmap, backBuffer);
+
+                    // ピクセルデータを抽出してイベントを発生
+                    if (FrameDataAvailable != null)
+                    {
+                        try
+                        {
+                            byte[] pixelData = Direct3D11Helper.CopyTexture2DToByteArray(_d3dDevice, bitmap);
+
+                            var eventArgs = new CapturedFrameEventArgs
+                            {
+                                PixelData = pixelData,
+                                Width = _lastSize.Width,
+                                Height = _lastSize.Height,
+                                Timestamp = DateTime.UtcNow
+                            };
+
+                            FrameDataAvailable?.Invoke(this, eventArgs);
+                        }
+                        catch (Exception ex)
+                        {
+                            // ピクセルデータの抽出エラーは無視して続行
+                            System.Diagnostics.Debug.WriteLine($"Error extracting pixel data: {ex.Message}");
+                        }
+                    }
                 }
             }
 

@@ -20,6 +20,11 @@ namespace RemoteCapture.Lib.CaptureSampleCore
         private IDirect3DDevice _device;
         private BasicCapture _capture;
 
+        /// <summary>
+        /// キャプチャされたフレームデータが利用可能になったときに発生するイベント
+        /// </summary>
+        public event EventHandler<CapturedFrameEventArgs> FrameDataAvailable;
+
         public BasicSampleApplication(Compositor compositor)
         {
             _compositor = compositor;
@@ -69,15 +74,28 @@ namespace RemoteCapture.Lib.CaptureSampleCore
             StopCapture();
             _capture = new BasicCapture(_device, item);
 
+            // イベントハンドラを接続
+            _capture.FrameDataAvailable += OnCaptureFrameDataAvailable;
+
             var surface = _capture.CreateSurface(_compositor);
             _brush.Surface = surface;
 
             _capture.StartCapture();
         }
 
+        private void OnCaptureFrameDataAvailable(object sender, CapturedFrameEventArgs e)
+        {
+            // イベントを転送
+            FrameDataAvailable?.Invoke(this, e);
+        }
+
         public void StopCapture()
         {
-            _capture?.Dispose();
+            if (_capture != null)
+            {
+                _capture.FrameDataAvailable -= OnCaptureFrameDataAvailable;
+                _capture.Dispose();
+            }
             _brush.Surface = null;
         }
     }

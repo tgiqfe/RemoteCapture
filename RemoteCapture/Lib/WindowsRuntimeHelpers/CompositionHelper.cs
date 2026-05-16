@@ -62,7 +62,7 @@ namespace RemoteCapture.Lib.WindowsRuntimeHelpers
 
                 // Query for ICompositorDesktopInterop interface
                 Guid iid = new Guid("29E691FA-4567-4DCA-B319-D0F207EB6807");
-                int hr = Marshal.QueryInterface(compositorPtr, ref iid, out nint interopPtr);
+                int hr = Marshal.QueryInterface(compositorPtr, in iid, out nint interopPtr);
 
                 if (hr != 0)
                 {
@@ -119,7 +119,7 @@ namespace RemoteCapture.Lib.WindowsRuntimeHelpers
 
                 // Query for ICompositorInterop interface
                 Guid iid = new Guid("25297D5C-3AD4-4C9C-B5CF-E36A38512330");
-                int hr = Marshal.QueryInterface(compositorPtr, ref iid, out nint interopPtr);
+                int hr = Marshal.QueryInterface(compositorPtr, in iid, out nint interopPtr);
 
                 if (hr != 0)
                 {

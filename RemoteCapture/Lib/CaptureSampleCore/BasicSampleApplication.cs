@@ -25,6 +25,36 @@ namespace RemoteCapture.Lib.CaptureSampleCore
         /// </summary>
         public event EventHandler<CapturedFrameEventArgs> FrameDataAvailable;
 
+        /// <summary>
+        /// 目標フレームレートを設定 (0 = 制限なし)
+        /// </summary>
+        public double TargetFrameRate
+        {
+            get => _capture?.TargetFrameRate ?? 0;
+            set
+            {
+                if (_capture != null)
+                {
+                    _capture.TargetFrameRate = value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// プレビュー描画を有効にするかどうか
+        /// </summary>
+        public bool EnablePreview
+        {
+            get => _capture?.EnablePreview ?? true;
+            set
+            {
+                if (_capture != null)
+                {
+                    _capture.EnablePreview = value;
+                }
+            }
+        }
+
         public BasicSampleApplication(Compositor compositor)
         {
             _compositor = compositor;

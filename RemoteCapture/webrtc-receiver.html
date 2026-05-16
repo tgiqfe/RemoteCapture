@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Video Receiver</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .video-container {
+            text-align: center;
+            background-color: #000;
+            border-radius: 8px;
+            padding: 10px;
+            min-height: 400px;
+        }
+
+        video {
+            width: 100%;
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 150px;
+            font-family: monospace;
+            font-size: 12px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+            resize: vertical;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            font-weight: bold;
+        }
+
+        .status.disconnected {
+            background-color: #f44336;
+            color: white;
+        }
+
+        .status.connecting {
+            background-color: #ff9800;
+            color: white;
+        }
+
+        .status.connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        label {
+            display: block;
+            margin-top: 15px;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .info {
+            background-color: #e3f2fd;
+            padding: 15px;
+            border-left: 4px solid #2196F3;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+
+        .step {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-left: 3px solid #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎥 WebRTC Video Receiver (ブラウザテスト用)</h1>
+
+    <div class="info">
+        <h3>📋 使い方:</h3>
+        <div class="step">1. RemoteCaptureアプリでモニターキャプチャを開始</div>
+        <div class="step">2. RemoteCaptureアプリで「Create Offer (SDP)」をクリック</div>
+        <div class="step">3. 表示されたLocal SDPを下の「Remote SDP (Offer from sender)」にコピペ</div>
+        <div class="step">4. 「Set Remote Offer」ボタンをクリック</div>
+        <div class="step">5. 生成された「Local SDP (Answer)」をRemoteCaptureアプリの「Remote SDP (Answer)」にコピペ</div>
+        <div class="step">6. RemoteCaptureアプリで「Set Remote Answer」をクリック</div>
+        <div class="step">7. 映像が表示されます！</div>
+    </div>
+
+    <div class="container">
+        <h2>📡 接続設定</h2>
+
+        <label for="offerSdp">Remote SDP (Offer from sender):</label>
+        <textarea id="offerSdp" placeholder="RemoteCaptureアプリのLocal SDPをここに貼り付けてください..."></textarea>
+
+        <button id="setOfferBtn" onclick="setRemoteOffer()">Set Remote Offer</button>
+
+        <label for="answerSdp">Local SDP (Answer - これをRemoteCaptureアプリに送信):</label>
+        <textarea id="answerSdp" readonly placeholder="Offerを設定するとAnswerが自動生成されます..."></textarea>
+
+        <button id="copyAnswerBtn" onclick="copyAnswer()" disabled>Copy Answer to Clipboard</button>
+
+        <div id="status" class="status disconnected">Status: Disconnected</div>
+    </div>
+
+    <div class="container video-container">
+        <h2>📺 受信映像</h2>
+        <video id="remoteVideo" autoplay playsinline controls></video>
+        <p id="videoStatus" style="color: #fff;">映像待機中...</p>
+    </div>
+
+    <div class="container">
+        <h2>🔍 デバッグ情報</h2>
+        <div id="debugInfo" style="font-family: monospace; font-size: 12px; white-space: pre-wrap;"></div>
+    </div>
+
+    <script>
+        let peerConnection = null;
+        const config = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            const debugInfo = document.getElementById('debugInfo');
+            debugInfo.textContent += `[${timestamp}] ${message}\n`;
+            console.log(message);
+        }
+
+        function updateStatus(status, className) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = `Status: ${status}`;
+            statusDiv.className = 'status ' + className;
+            log(`Status changed: ${status}`);
+        }
+
+        function cleanSdp(sdp) {
+            // SIPSorceryが生成したSDPをブラウザ互換形式に変換
+            log('Cleaning SDP for browser compatibility...');
+
+            // 改行コードを正規化（\r\n、\n、\r のいずれにも対応）
+            const normalizedSdp = sdp.replace(/\r\n|\r|\n/g, '\n');
+            const lines = normalizedSdp.split('\n');
+            const cleanedLines = [];
+
+            log(`Total lines in SDP: ${lines.length}`);
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+
+                // 空行はスキップ
+                if (line.trim() === '') {
+                    continue;
+                }
+
+                // すべてのa=ssrc:行を削除（ブラウザが自動生成するため）
+                if (line.startsWith('a=ssrc:')) {
+                    log(`Removing line: ${line}`);
+                    continue;
+                }
+
+                // a=msid-semantic:行も削除（古い形式）
+                if (line.startsWith('a=msid-semantic:')) {
+                    log(`Removing line: ${line}`);
+                    continue;
+                }
+
+                cleanedLines.push(line);
+            }
+
+            // SDPを再構築（標準的な\r\n改行で）
+            const cleanedSdp = cleanedLines.join('\r\n') + '\r\n';
+            log('SDP cleaned successfully');
+            log(`Original lines: ${lines.length}, Cleaned lines: ${cleanedLines.length}`);
+            return cleanedSdp;
+        }
+
+        async function setRemoteOffer() {
+            try {
+                const offerSdp = document.getElementById('offerSdp').value.trim();
+
+                if (!offerSdp) {
+                    alert('Please paste the SDP offer from RemoteCapture app');
+                    return;
+                }
+
+                log('Creating PeerConnection...');
+                updateStatus('Creating connection...', 'connecting');
+
+                // PeerConnectionの作成
+                peerConnection = new RTCPeerConnection(config);
+
+                // イベントハンドラの設定
+                peerConnection.oniceconnectionstatechange = () => {
+                    log(`ICE connection state: ${peerConnection.iceConnectionState}`);
+
+                    switch (peerConnection.iceConnectionState) {
+                        case 'connected':
+                        case 'completed':
+                            updateStatus('Connected', 'connected');
+                            break;
+                        case 'failed':
+                            updateStatus('Connection Failed', 'disconnected');
+                            break;
+                        case 'disconnected':
+                            updateStatus('Disconnected', 'disconnected');
+                            break;
+                    }
+                };
+
+                peerConnection.ontrack = (event) => {
+                    log(`Track received: ${event.track.kind}`);
+                    log(`Track state: ${event.track.readyState}`);
+                    log(`Streams count: ${event.streams.length}`);
+
+                    if (event.track.kind === 'video') {
+                        const remoteVideo = document.getElementById('remoteVideo');
+                        if (event.streams && event.streams[0]) {
+                            remoteVideo.srcObject = event.streams[0];
+                            document.getElementById('videoStatus').textContent = '映像受信中！';
+                            log('Video stream attached to video element');
+
+                            // ビデオ要素のイベントをモニター
+                            remoteVideo.onloadedmetadata = () => {
+                                log(`Video metadata loaded: ${remoteVideo.videoWidth}x${remoteVideo.videoHeight}`);
+                            };
+
+                            remoteVideo.onplay = () => {
+                                log('Video playback started');
+                            };
+
+                            remoteVideo.onerror = (e) => {
+                                log(`Video error: ${e}`);
+                            };
+                        } else {
+                            log('Warning: No streams in track event');
+                        }
+                    }
+                };
+
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        log(`ICE candidate: ${event.candidate.candidate.substring(0, 50)}...`);
+                    } else {
+                        log('All ICE candidates have been sent');
+                    }
+                };
+
+                // SDPをクリーンアップ
+                log('Original SDP:');
+                log(offerSdp.substring(0, 200) + '...');
+
+                const cleanedSdp = cleanSdp(offerSdp);
+
+                log('Cleaned SDP:');
+                log(cleanedSdp.substring(0, 200) + '...');
+
+                // Remote Offer (送信側からのOffer)を設定
+                log('Setting remote description (offer)...');
+                await peerConnection.setRemoteDescription({
+                    type: 'offer',
+                    sdp: cleanedSdp
+                });
+
+                log('Remote description set successfully');
+
+                // Local Answer (このブラウザからのAnswer)を作成
+                log('Creating answer...');
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                log('Answer created successfully');
+
+                // ICE候補が収集されるまで少し待つ
+                await new Promise(resolve => setTimeout(resolve, 1000));
+
+                // Answerを表示
+                const answerSdp = peerConnection.localDescription.sdp;
+                document.getElementById('answerSdp').value = answerSdp;
+                document.getElementById('copyAnswerBtn').disabled = false;
+
+                updateStatus('Waiting for connection...', 'connecting');
+                log('Answer SDP generated. Copy it and paste into RemoteCapture app.');
+
+                alert('Answer SDPが生成されました!\n\n「Local SDP (Answer)」の内容をコピーして、RemoteCaptureアプリの「Remote SDP (Answer)」に貼り付けてください。');
+
+            } catch (error) {
+                log(`Error: ${error.message}`);
+                alert(`Error: ${error.message}`);
+                updateStatus('Error', 'disconnected');
+            }
+        }
+
+        function copyAnswer() {
+            const answerSdp = document.getElementById('answerSdp');
+            answerSdp.select();
+            document.execCommand('copy');
+
+            const btn = document.getElementById('copyAnswerBtn');
+            const originalText = btn.textContent;
+            btn.textContent = 'Copied! ✓';
+            setTimeout(() => {
+                btn.textContent = originalText;
+            }, 2000);
+
+            log('Answer SDP copied to clipboard');
+        }
+
+        // ページロード時
+        window.onload = () => {
+            log('WebRTC Receiver ready');
+            updateStatus('Disconnected', 'disconnected');
+        };
+    </script>
+</body>
+</html>

@@ -33,10 +33,38 @@ namespace RemoteCapture.Lib.CaptureSampleCore
         private SharpDX.Direct3D11.Device _d3dDevice;
         private SharpDX.DXGI.SwapChain1 _swapChain;
 
+        // フレームレート制御用
+        private DateTime _lastFrameTime = DateTime.MinValue;
+        private double _targetFrameIntervalMs = 0; // 0 = 制限なし
+
+        /// <summary>
+        /// プレビュー描画を有効にするかどうか
+        /// </summary>
+        public bool EnablePreview { get; set; } = true;
+
         /// <summary>
         /// キャプチャされたフレームデータが利用可能になったときに発生するイベント
         /// </summary>
         public event EventHandler<CapturedFrameEventArgs> FrameDataAvailable;
+
+        /// <summary>
+        /// 目標フレームレートを設定 (0 = 制限なし)
+        /// </summary>
+        public double TargetFrameRate
+        {
+            get => _targetFrameIntervalMs > 0 ? 1000.0 / _targetFrameIntervalMs : 0;
+            set
+            {
+                if (value <= 0)
+                {
+                    _targetFrameIntervalMs = 0; // 制限なし
+                }
+                else
+                {
+                    _targetFrameIntervalMs = 1000.0 / value; // ミリ秒に変換
+                }
+            }
+        }
 
         public BasicCapture(IDirect3DDevice device, GraphicsCaptureItem item)
         {
@@ -103,10 +131,31 @@ namespace RemoteCapture.Lib.CaptureSampleCore
                 using (var backBuffer = _swapChain.GetBackBuffer<SharpDX.Direct3D11.Texture2D>(0))
                 using (var bitmap = Direct3D11Helper.CreateSharpDXTexture2D(frame.Surface))
                 {
-                    _d3dDevice.ImmediateContext.CopyResource(bitmap, backBuffer);
+                    // プレビューが有効な場合のみGPUコピーを実行
+                    if (EnablePreview)
+                    {
+                        _d3dDevice.ImmediateContext.CopyResource(bitmap, backBuffer);
+                    }
+
+                    // フレームレート制限のチェック
+                    bool shouldProcessFrame = true;
+                    if (_targetFrameIntervalMs > 0)
+                    {
+                        var now = DateTime.UtcNow;
+                        var elapsed = (now - _lastFrameTime).TotalMilliseconds;
+
+                        if (elapsed < _targetFrameIntervalMs)
+                        {
+                            shouldProcessFrame = false; // スキップ
+                        }
+                        else
+                        {
+                            _lastFrameTime = now;
+                        }
+                    }
 
                     // ピクセルデータを抽出してイベントを発生
-                    if (FrameDataAvailable != null)
+                    if (shouldProcessFrame && FrameDataAvailable != null)
                     {
                         try
                         {
@@ -131,7 +180,11 @@ namespace RemoteCapture.Lib.CaptureSampleCore
                 }
             }
 
-            _swapChain.Present(0, SharpDX.DXGI.PresentFlags.None);
+            // プレビューが有効な場合のみPresentを実行
+            if (EnablePreview)
+            {
+                _swapChain.Present(0, SharpDX.DXGI.PresentFlags.None);
+            }
             if (newSize)
             {
                 _framePool.Recreate(

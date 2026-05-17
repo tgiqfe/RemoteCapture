@@ -17,6 +17,27 @@ namespace RemoteCapture.Lib.WebRTC
         private RTCPeerConnection? _peerConnection;
         private FFmpegVideoEndPoint? _videoEndPoint;
 
+        // 診断用カウンター
+        private long _rtpFramesReceived = 0;
+        private long _framesDecoded = 0;
+        private long _framesDelivered = 0;
+        private DateTime _lastStatsLog = DateTime.UtcNow;
+
+        /// <summary>
+        /// 受信したRTPフレーム数（OnVideoFrameReceivedが発生した回数）
+        /// </summary>
+        public long RtpFramesReceived => _rtpFramesReceived;
+
+        /// <summary>
+        /// デコードされたフレーム数（OnVideoSinkDecodedSampleが発生した回数）
+        /// </summary>
+        public long FramesDecoded => _framesDecoded;
+
+        /// <summary>
+        /// 配信されたフレーム数（VideoFrameReceivedイベントを発生させた回数）
+        /// </summary>
+        public long FramesDelivered => _framesDelivered;
+
         /// <summary>
         /// 接続状態が変化したときに発生するイベント
         /// </summary>
@@ -82,6 +103,18 @@ namespace RemoteCapture.Lib.WebRTC
                 // デコード済みフレームを受け取る
                 _videoEndPoint.OnVideoSinkDecodedSample += OnDecodedVideoFrame;
 
+                // ビデオフォーマットのネゴシエーション後にデコーダーを開始
+                _peerConnection.OnVideoFormatsNegotiated += async (formats) =>
+                {
+                    System.Diagnostics.Debug.WriteLine($"[RECEIVER] Video formats negotiated: {formats.First().FormatName}");
+                    _videoEndPoint.SetVideoSinkFormat(formats.First());
+
+                    // デコーダーを開始
+                    await _videoEndPoint.StartVideoSink();
+
+                    System.Diagnostics.Debug.WriteLine("[RECEIVER] FFmpegVideoEndPoint video sink started after format negotiation");
+                };
+
                 // MediaStreamTrackを作成
                 var videoTrack = new MediaStreamTrack(_videoEndPoint.GetVideoSinkFormats(), MediaStreamStatusEnum.RecvOnly);
                 _peerConnection.addTrack(videoTrack);
@@ -89,11 +122,21 @@ namespace RemoteCapture.Lib.WebRTC
                 // 受信したビデオフレームをエンドポイントに渡す
                 _peerConnection.OnVideoFrameReceived += (remoteEp, timestamp, frame, format) =>
                 {
-                    System.Diagnostics.Debug.WriteLine($"RTP video frame received: {frame.Length} bytes, timestamp={timestamp}");
+                    _rtpFramesReceived++;
+
+                    if (_rtpFramesReceived == 1)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[RECEIVER] First RTP frame received: {frame.Length} bytes, timestamp={timestamp}");
+                    }
+                    else if (_rtpFramesReceived % 30 == 0)  // 30フレームごとにログ出力
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[RECEIVER] RTP frames received: {_rtpFramesReceived}");
+                    }
+
                     _videoEndPoint.GotVideoFrame(remoteEp, timestamp, frame, format);
                 };
 
-                System.Diagnostics.Debug.WriteLine("Video track added for receiving (H.264)");
+                System.Diagnostics.Debug.WriteLine("[RECEIVER] Video track added for receiving (H.264)");
 
                 // Remote Offer (送信側からのOffer)を設定
                 var offerInit = new RTCSessionDescriptionInit
@@ -106,10 +149,11 @@ namespace RemoteCapture.Lib.WebRTC
                 if (result != SetDescriptionResultEnum.OK)
                 {
                     ErrorOccurred?.Invoke(this, $"Failed to set remote offer: {result}");
+                    System.Diagnostics.Debug.WriteLine($"[RECEIVER] Failed to set remote offer: {result}");
                     return false;
                 }
 
-                System.Diagnostics.Debug.WriteLine("Remote offer set successfully");
+                System.Diagnostics.Debug.WriteLine("[RECEIVER] Remote offer set successfully");
 
                 // Local Answer (このアプリからのAnswer)を作成
                 var answer = _peerConnection.createAnswer();
@@ -122,13 +166,14 @@ namespace RemoteCapture.Lib.WebRTC
                 var answerSdp = _peerConnection.localDescription.sdp.ToString();
                 LocalSdpReady?.Invoke(this, answerSdp);
 
-                System.Diagnostics.Debug.WriteLine("Answer created and local description set");
+                System.Diagnostics.Debug.WriteLine("[RECEIVER] Answer created and local description set");
 
                 return true;
             }
             catch (Exception ex)
             {
                 ErrorOccurred?.Invoke(this, $"Error setting remote offer: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[RECEIVER] Exception in SetRemoteOfferAndCreateAnswerAsync: {ex.Message}\n{ex.StackTrace}");
                 return false;
             }
         }
@@ -137,7 +182,12 @@ namespace RemoteCapture.Lib.WebRTC
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine($"Decoded frame received: {width}x{height}, {frame.Length} bytes, format={pixelFormat}");
+                _framesDecoded++;
+
+                if (_framesDecoded == 1)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[RECEIVER] First frame decoded: {width}x{height}, {frame.Length} bytes, format={pixelFormat}");
+                }
 
                 // デコード済みフレームをイベントで通知
                 var eventArgs = new VideoFrameEventArgs
@@ -149,10 +199,19 @@ namespace RemoteCapture.Lib.WebRTC
                 };
 
                 VideoFrameReceived?.Invoke(this, eventArgs);
+                _framesDelivered++;
+
+                // 1秒ごとに統計をログ出力
+                var now = DateTime.UtcNow;
+                if ((now - _lastStatsLog).TotalSeconds >= 1.0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[RECEIVER] STATS: RTP Received={_rtpFramesReceived}, Decoded={_framesDecoded}, Delivered={_framesDelivered}");
+                    _lastStatsLog = now;
+                }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error handling decoded video frame: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[RECEIVER] Error handling decoded video frame: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
@@ -172,7 +231,7 @@ namespace RemoteCapture.Lib.WebRTC
             {
                 ConnectionState = newState;
                 ConnectionStateChanged?.Invoke(this, newState);
-                System.Diagnostics.Debug.WriteLine($"ICE connection state changed to {state}");
+                System.Diagnostics.Debug.WriteLine($"[RECEIVER] ICE connection state changed to {state}");
             }
         }
 
@@ -181,6 +240,8 @@ namespace RemoteCapture.Lib.WebRTC
         /// </summary>
         public async Task CloseAsync()
         {
+            System.Diagnostics.Debug.WriteLine($"[RECEIVER] Closing connection. Final stats: RTP Received={_rtpFramesReceived}, Decoded={_framesDecoded}, Delivered={_framesDelivered}");
+
             if (_videoEndPoint != null)
             {
                 await _videoEndPoint.CloseVideoSink();
@@ -194,6 +255,11 @@ namespace RemoteCapture.Lib.WebRTC
                 _peerConnection.Dispose();
                 _peerConnection = null;
             }
+
+            // カウンターをリセット
+            _rtpFramesReceived = 0;
+            _framesDecoded = 0;
+            _framesDelivered = 0;
 
             ConnectionState = WebRTCConnectionState.Closed;
             await Task.CompletedTask;

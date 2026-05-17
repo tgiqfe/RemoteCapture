@@ -122,8 +122,11 @@
 
             <!-- キャプチャ/受信プレビュー -->
             <Grid Grid.Row="0">
-                <!-- 送信モード：Compositionで表示（BasicSampleApplicationが管理） -->
-                <Rectangle x:Name="SenderPreviewArea" Fill="WhiteSmoke" />
+                <!-- 送信モード：Image コントロールで表示 -->
+                <Image x:Name="SenderVideoImage" 
+                       Stretch="Uniform" 
+                       HorizontalAlignment="Center" 
+                       VerticalAlignment="Center" />
 
                 <!-- 受信モード：Image コントロールで表示 -->
                 <Image x:Name="ReceiverVideoImage" 

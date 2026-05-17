@@ -4,7 +4,6 @@ using RemoteCapture.Lib.WebRTC;
 using RemoteCapture.Lib.WindowsRuntimeHelpers;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Numerics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -23,8 +22,6 @@ namespace RemoteCapture
     {
         private nint _hwnd;
         private WinUIComposition.Compositor _compositor;
-        private WinUIComposition.CompositionTarget _target;
-        private WinUIComposition.ContainerVisual _root;
 
         private BasicSampleApplication _sample;
         private ObservableCollection<Process> processes;
@@ -34,6 +31,9 @@ namespace RemoteCapture
         private int _frameCount = 0;
         private DateTime _lastFpsUpdate = DateTime.UtcNow;
         private double _currentFps = 0;
+
+        // 診断情報更新用タイマー
+        private System.Windows.Threading.DispatcherTimer? _diagnosticTimer;
 
         // WebRTC
         private WebRTCPeer? _webRtcPeer;
@@ -56,42 +56,22 @@ namespace RemoteCapture
         {
             var interopWindow = new WindowInteropHelper(this);
             _hwnd = interopWindow.Handle;
-            var presentationSource = PresentationSource.FromVisual(this);
-            double dpiX = 1.0;
-            double dpiY = 1.0;
-            if (presentationSource != null)
-            {
-                dpiX = presentationSource.CompositionTarget.TransformToDevice.M11;
-                dpiY = presentationSource.CompositionTarget.TransformToDevice.M22;
-            }
-            var controlsWidth = (float)(ControlsGrid.ActualWidth * dpiX);
 
-            InitComposition(controlsWidth);
+            InitComposition();
             InitMonitorList();
+            InitDiagnosticTimer();
         }
 
-        private void InitComposition(float controlsWidth)
+        private void InitComposition()
         {
             // Create the compositor.
             _compositor = new WinUIComposition.Compositor();
-
-            // Create a target for the window.
-            _target = _compositor.CreateDesktopWindowTarget(_hwnd, true);
-
-            // Attach the root visual.
-            _root = _compositor.CreateContainerVisual();
-            _root.RelativeSizeAdjustment = Vector2.One;
-            _root.Size = new Vector2(-controlsWidth, 0);
-            _root.Offset = new Vector3(controlsWidth, 0, 0);
-            _target.Root = _root;
 
             // Setup the rest of the sample application.
             _sample = new BasicSampleApplication(_compositor);
 
             // フレームデータイベントを購読
             _sample.FrameDataAvailable += OnFrameDataAvailable;
-
-            _root.Children.InsertAtTop(_sample.Visual);
         }
 
         private void InitMonitorList()
@@ -105,6 +85,75 @@ namespace RemoteCapture
             {
                 MonitorComboBox.IsEnabled = false;
                 PrimaryMonitorButton.IsEnabled = false;
+            }
+        }
+
+        private void InitDiagnosticTimer()
+        {
+            // 1秒ごとに診断情報を更新
+            _diagnosticTimer = new System.Windows.Threading.DispatcherTimer();
+            _diagnosticTimer.Interval = TimeSpan.FromSeconds(1);
+            _diagnosticTimer.Tick += DiagnosticTimer_Tick;
+            _diagnosticTimer.Start();
+            Debug.WriteLine("Diagnostic timer started");
+        }
+
+        private void DiagnosticTimer_Tick(object? sender, EventArgs e)
+        {
+            try
+            {
+                if (_isSenderMode && _webRtcPeer != null)
+                {
+                    // 送信側の診断情報を追加
+                    var diagInfo = $" | Diag: Supplied={_webRtcPeer.FramesSupplied}, Encoded={_webRtcPeer.FramesEncoded}, Sent={_webRtcPeer.FramesSent}";
+                    if (!ConnectionStatusText.Text.Contains("Diag:"))
+                    {
+                        ConnectionStatusText.Text += diagInfo;
+                    }
+                    else
+                    {
+                        var parts = ConnectionStatusText.Text.Split(new[] { " | Diag:" }, StringSplitOptions.None);
+                        ConnectionStatusText.Text = parts[0] + diagInfo;
+                    }
+
+                    // 問題検出
+                    if (_webRtcPeer.FramesSupplied > 0 && _webRtcPeer.FramesEncoded == 0)
+                    {
+                        Debug.WriteLine("[DIAGNOSTIC] WARNING: Frames supplied but NOT encoded! Check FFmpeg encoder.");
+                    }
+                    if (_webRtcPeer.FramesEncoded > 0 && _webRtcPeer.FramesSent == 0)
+                    {
+                        Debug.WriteLine("[DIAGNOSTIC] WARNING: Frames encoded but NOT sent! Check PeerConnection.");
+                    }
+                }
+                else if (!_isSenderMode && _webRtcReceiver != null)
+                {
+                    // 受信側の診断情報を追加
+                    var diagInfo = $" | Diag: RTP={_webRtcReceiver.RtpFramesReceived}, Decoded={_webRtcReceiver.FramesDecoded}, Delivered={_webRtcReceiver.FramesDelivered}";
+                    if (!ReceiverConnectionStatusText.Text.Contains("Diag:"))
+                    {
+                        ReceiverConnectionStatusText.Text += diagInfo;
+                    }
+                    else
+                    {
+                        var parts = ReceiverConnectionStatusText.Text.Split(new[] { " | Diag:" }, StringSplitOptions.None);
+                        ReceiverConnectionStatusText.Text = parts[0] + diagInfo;
+                    }
+
+                    // 問題検出
+                    if (_webRtcReceiver.RtpFramesReceived > 0 && _webRtcReceiver.FramesDecoded == 0)
+                    {
+                        Debug.WriteLine("[DIAGNOSTIC] WARNING: RTP frames received but NOT decoded! Check FFmpeg decoder.");
+                    }
+                    if (_webRtcReceiver.FramesDecoded > 0 && _webRtcReceiver.FramesDelivered == 0)
+                    {
+                        Debug.WriteLine("[DIAGNOSTIC] WARNING: Frames decoded but NOT delivered to UI! Check event handler.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error in diagnostic timer: {ex.Message}");
             }
         }
 
@@ -128,8 +177,8 @@ namespace RemoteCapture
                 ReceiverSdpArea.Visibility = _isSenderMode ? Visibility.Collapsed : Visibility.Visible;
 
             // プレビューエリアの切り替え
-            if (SenderPreviewArea != null)
-                SenderPreviewArea.Visibility = _isSenderMode ? Visibility.Visible : Visibility.Collapsed;
+            if (SenderVideoImage != null)
+                SenderVideoImage.Visibility = _isSenderMode ? Visibility.Visible : Visibility.Collapsed;
             if (ReceiverVideoImage != null)
                 ReceiverVideoImage.Visibility = _isSenderMode ? Visibility.Collapsed : Visibility.Visible;
             if (ReceiverWaitingMessage != null)
@@ -384,6 +433,24 @@ namespace RemoteCapture
                     DataSizeText.Text = $"Data Size: {e.PixelData.Length:N0} bytes ({e.PixelData.Length / 1024.0 / 1024.0:F2} MB)";
                     FpsText.Text = $"FPS: {_currentFps:F1}";
                     LastUpdateText.Text = $"Last Update: {e.Timestamp:HH:mm:ss.fff}";
+
+                    // 送信モードのプレビューをImageコントロールで表示
+                    if (_isSenderMode && SenderVideoImage != null)
+                    {
+                        int stride = e.Width * 4; // BGRA = 4 bytes per pixel
+                        var bitmap = BitmapSource.Create(
+                            e.Width,
+                            e.Height,
+                            96, // dpiX
+                            96, // dpiY
+                            PixelFormats.Bgra32,
+                            null,
+                            e.PixelData,
+                            stride
+                        );
+
+                        SenderVideoImage.Source = bitmap;
+                    }
                 });
 
                 // デバッグ出力（最初のフレームと1秒ごと）

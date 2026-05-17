@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <SupportedOSPlatformVersion>10.0.22000.0</SupportedOSPlatformVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,6 +15,12 @@
     <PackageReference Include="SIPSorcery" Version="10.0.6" />
     <PackageReference Include="SIPSorceryMedia.Encoders" Version="10.0.4" />
     <PackageReference Include="SIPSorceryMedia.FFmpeg" Version="10.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="runtimes\**\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

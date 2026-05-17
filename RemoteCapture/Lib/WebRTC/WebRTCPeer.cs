@@ -28,7 +28,28 @@ namespace RemoteCapture.Lib.WebRTC
     {
         private RTCPeerConnection? _peerConnection;
         private MediaStreamTrack? _videoTrack;
-        private FFmpegVideoEndPoint? _videoEndPoint;
+        private CaptureVideoSource? _captureVideoSource;
+
+        // 診断用カウンター
+        private long _framesSupplied = 0;
+        private long _framesEncoded = 0;
+        private long _framesSent = 0;
+        private DateTime _lastStatsLog = DateTime.UtcNow;
+
+        /// <summary>
+        /// 供給されたフレーム数（ExternalVideoSourceRawSampleが呼ばれた回数）
+        /// </summary>
+        public long FramesSupplied => _framesSupplied;
+
+        /// <summary>
+        /// エンコードされたフレーム数（OnVideoSourceEncodedSampleが発生した回数）
+        /// </summary>
+        public long FramesEncoded => _framesEncoded;
+
+        /// <summary>
+        /// 送信されたフレーム数（SendVideoが呼ばれた回数）
+        /// </summary>
+        public long FramesSent => _framesSent;
 
         /// <summary>
         /// 接続状態が変化したときに発生するイベント
@@ -60,18 +81,28 @@ namespace RemoteCapture.Lib.WebRTC
                 // 既存の接続をクローズ
                 await CloseAsync();
 
-                // FFmpegビデオエンドポイントを作成（H.264エンコーダー + VideoSourceの両方の役割）
-                _videoEndPoint = new FFmpegVideoEndPoint();
-                _videoEndPoint.RestrictFormats(format => format.Codec == VideoCodecsEnum.H264);
+                // CaptureVideoSourceを作成（FFmpegVideoEncoderを内部で使用）
+                _captureVideoSource = new CaptureVideoSource();
 
-                // MediaEndPointsを作成
-                var mediaEndPoints = new MediaEndPoints
+                // エンコード済みサンプルをRTPで送信
+                _captureVideoSource.OnVideoSourceEncodedSample += (timestamp, sample) =>
                 {
-                    VideoSource = _videoEndPoint as IVideoSource,
-                    VideoSink = _videoEndPoint as IVideoSink
+                    _framesEncoded++;
+
+                    if (_peerConnection != null)
+                    {
+                        _peerConnection.SendVideo(timestamp, sample);
+
+                        if (_framesEncoded == 1)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[SENDER] First encoded frame sent: timestamp={timestamp}, size={sample.Length}");
+                        }
+                    }
                 };
 
-                // PeerConnectionの作成（MediaEndPointsを渡す）
+                System.Diagnostics.Debug.WriteLine("[SENDER] CaptureVideoSource created and OnVideoSourceEncodedSample connected to SendVideo");
+
+                // PeerConnectionの作成
                 var config = new RTCConfiguration
                 {
                     iceServers = new List<RTCIceServer>
@@ -94,44 +125,46 @@ namespace RemoteCapture.Lib.WebRTC
                     System.Diagnostics.Debug.WriteLine($"Peer connection state changed to {state}.");
                 };
 
-                // FFmpegVideoEndPointを作成
-                _videoEndPoint = new FFmpegVideoEndPoint();
-
-                // MediaStreamTrackを追加
-                _videoTrack = new MediaStreamTrack(
-                    _videoEndPoint.GetVideoSourceFormats(), 
-                    MediaStreamStatusEnum.SendOnly);
-                _peerConnection.addTrack(_videoTrack);
-
-                // ビデオフォーマットのネゴシエーション後にエンコーダーを開始
-                _peerConnection.OnVideoFormatsNegotiated += async (formats) =>
+                // RTCPレポートでフレーム送信をカウント
+                _peerConnection.OnSendReport += (mediaType, report) =>
                 {
-                    System.Diagnostics.Debug.WriteLine($"Video formats negotiated: {formats.First().FormatName}");
-                    _videoEndPoint.SetVideoSourceFormat(formats.First());
-
-                    // エンコーダーを開始
-                    await _videoEndPoint.StartVideo();
-
-                    System.Diagnostics.Debug.WriteLine("FFmpegVideoEndPoint started after format negotiation");
-
-                    // FFmpegVideoEndPointとRTCPeerConnectionの送信パイプラインを接続
-                    if (_videoEndPoint is IVideoSource videoSource)
+                    if (report != null && mediaType == SDPMediaTypesEnum.video && report.SenderReport != null)
                     {
-                        // ビデオソースのエンコード済みサンプルをRTPで送信
-                        videoSource.OnVideoSourceEncodedSample += (timestamp, sample) =>
+                        var packetsSent = report.SenderReport.PacketCount;
+                        if (packetsSent != _framesSent)
                         {
-                            if (_peerConnection != null && _peerConnection.VideoLocalTrack != null)
-                            {
-                                _peerConnection.SendVideo((uint)timestamp, sample);
-                                System.Diagnostics.Debug.WriteLine($"Sent encoded video sample: timestamp={timestamp}, length={sample.Length}");
-                            }
-                        };
+                            _framesSent = packetsSent;
+                            _framesEncoded = packetsSent; // パケット送信 = エンコード成功と仮定
 
-                        System.Diagnostics.Debug.WriteLine("Connected FFmpegVideoEndPoint.OnVideoSourceEncodedSample to PeerConnection.SendVideo");
+                            // 1秒ごとに統計をログ出力
+                            var now = DateTime.UtcNow;
+                            if ((now - _lastStatsLog).TotalSeconds >= 1.0)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[SENDER] STATS: Supplied={_framesSupplied}, Encoded={_framesEncoded}, Sent={_framesSent}");
+                                _lastStatsLog = now;
+                            }
+                        }
                     }
                 };
 
-                System.Diagnostics.Debug.WriteLine($"Video track added with H.264 FFmpeg encoder");
+                // ビデオフォーマットのネゴシエーション後にビデオソースを開始
+                _peerConnection.OnVideoFormatsNegotiated += async (formats) =>
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SENDER] Video formats negotiated: {formats.First().FormatName}");
+
+                    _captureVideoSource.SetVideoSourceFormat(formats.First());
+                    await _captureVideoSource.StartVideo();
+
+                    System.Diagnostics.Debug.WriteLine("[SENDER] CaptureVideoSource started");
+                };
+
+                // MediaStreamTrackを追加
+                _videoTrack = new MediaStreamTrack(
+                    _captureVideoSource.GetVideoSourceFormats(), 
+                    MediaStreamStatusEnum.SendOnly);
+                _peerConnection.addTrack(_videoTrack);
+
+                System.Diagnostics.Debug.WriteLine($"[SENDER] Video track added with CaptureVideoSource");
 
                 // Offerの作成
                 var offer = _peerConnection.createOffer();
@@ -168,7 +201,7 @@ namespace RemoteCapture.Lib.WebRTC
                 if (_peerConnection == null)
                 {
                     ErrorOccurred?.Invoke(this, "PeerConnection is not initialized");
-                    System.Diagnostics.Debug.WriteLine("Error: PeerConnection is null");
+                    System.Diagnostics.Debug.WriteLine("[SENDER] Error: PeerConnection is null");
                     return false;
                 }
 
@@ -182,25 +215,25 @@ namespace RemoteCapture.Lib.WebRTC
                     sdp = sdp
                 };
 
-                System.Diagnostics.Debug.WriteLine($"Setting remote description (type={descriptionType})...");
+                System.Diagnostics.Debug.WriteLine($"[SENDER] Setting remote description (type={descriptionType})...");
                 var result = _peerConnection.setRemoteDescription(remoteDescription);
 
                 if (result == SetDescriptionResultEnum.OK)
                 {
-                    System.Diagnostics.Debug.WriteLine("Remote description set successfully");
+                    System.Diagnostics.Debug.WriteLine("[SENDER] Remote description set successfully");
                     return true;
                 }
                 else
                 {
                     ErrorOccurred?.Invoke(this, $"Failed to set remote description: {result}");
-                    System.Diagnostics.Debug.WriteLine($"Failed to set remote description: {result}");
+                    System.Diagnostics.Debug.WriteLine($"[SENDER] Failed to set remote description: {result}");
                     return false;
                 }
             }
             catch (Exception ex)
             {
                 ErrorOccurred?.Invoke(this, $"Error setting remote description: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"Exception in SetRemoteDescriptionAsync: {ex.Message}\n{ex.StackTrace}");
+                System.Diagnostics.Debug.WriteLine($"[SENDER] Exception in SetRemoteDescriptionAsync: {ex.Message}\n{ex.StackTrace}");
                 return false;
             }
         }
@@ -210,25 +243,23 @@ namespace RemoteCapture.Lib.WebRTC
         /// </summary>
         public void SupplyFrame(byte[] pixelData, int width, int height)
         {
-            if (_videoEndPoint != null && _peerConnection != null)
+            if (_captureVideoSource != null && _peerConnection != null)
             {
-                System.Diagnostics.Debug.WriteLine($"WebRTCPeer: Calling FFmpegVideoEndPoint.ExternalVideoSourceRawSample({width}x{height}, {pixelData.Length} bytes)");
+                _framesSupplied++;
 
-                uint timestamp = (uint)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                _videoEndPoint.ExternalVideoSourceRawSample(timestamp, width, height, pixelData, VideoPixelFormatsEnum.Bgra);
-
-                // エンコード済みサンプルがあるか確認
-                if (_peerConnection.VideoLocalTrack != null)
+                if (_framesSupplied == 1)
                 {
-                    System.Diagnostics.Debug.WriteLine($"VideoLocalTrack exists, StreamStatus={_peerConnection.VideoLocalTrack.StreamStatus}");
+                    System.Diagnostics.Debug.WriteLine($"[SENDER] First frame supplied: {width}x{height}, {pixelData.Length} bytes");
                 }
+
+                _captureVideoSource.SupplyFrame(pixelData, width, height);
             }
             else
             {
-                if (_videoEndPoint == null)
-                    System.Diagnostics.Debug.WriteLine("Warning: FFmpegVideoEndPoint is null, cannot supply frame");
+                if (_captureVideoSource == null)
+                    System.Diagnostics.Debug.WriteLine("[SENDER] Warning: CaptureVideoSource is null, cannot supply frame");
                 if (_peerConnection == null)
-                    System.Diagnostics.Debug.WriteLine("Warning: PeerConnection is null, cannot supply frame");
+                    System.Diagnostics.Debug.WriteLine("[SENDER] Warning: PeerConnection is null, cannot supply frame");
             }
         }
 
@@ -239,11 +270,13 @@ namespace RemoteCapture.Lib.WebRTC
         {
             try
             {
-                if (_videoEndPoint != null)
+                System.Diagnostics.Debug.WriteLine($"[SENDER] Closing connection. Final stats: Supplied={_framesSupplied}, Encoded={_framesEncoded}, Sent={_framesSent}");
+
+                if (_captureVideoSource != null)
                 {
-                    await _videoEndPoint.CloseVideo();
-                    _videoEndPoint.Dispose();
-                    _videoEndPoint = null;
+                    await _captureVideoSource.CloseVideo();
+                    _captureVideoSource.Dispose();
+                    _captureVideoSource = null;
                 }
 
                 if (_peerConnection != null)
@@ -252,6 +285,11 @@ namespace RemoteCapture.Lib.WebRTC
                     _peerConnection.Dispose();
                     _peerConnection = null;
                 }
+
+                // カウンターをリセット
+                _framesSupplied = 0;
+                _framesEncoded = 0;
+                _framesSent = 0;
 
                 ConnectionState = WebRTCConnectionState.Closed;
                 ConnectionStateChanged?.Invoke(this, ConnectionState);
@@ -267,7 +305,7 @@ namespace RemoteCapture.Lib.WebRTC
         /// </summary>
         private void UpdateConnectionState(RTCIceConnectionState iceState)
         {
-            System.Diagnostics.Debug.WriteLine($"ICE connection state changed to {iceState}");
+            System.Diagnostics.Debug.WriteLine($"[SENDER] ICE connection state changed to {iceState}");
 
             switch (iceState)
             {

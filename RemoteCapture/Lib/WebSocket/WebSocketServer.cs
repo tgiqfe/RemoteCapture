@@ -127,32 +127,41 @@ namespace RemoteCapture.Lib.WebSocket
 
                             RemoteCapture.Lib.Logger.Debug($"WebSocketServer received text message: {messageText.Substring(0, Math.Min(100, messageText.Length))}...");
 
-                            try
+                            // Check if message contains KeyCode (keyboard event) or NormalizedX (mouse event)
+                            if (messageText.Contains("\"KeyCode\""))
                             {
-                                // Try to deserialize as MouseEventMessage
-                                var mouseEvent = JsonSerializer.Deserialize<MouseEventMessage>(messageText);
-                                if (mouseEvent != null)
+                                // This is a keyboard event
+                                try
                                 {
-                                    RemoteCapture.Lib.Logger.Debug($"Deserialized MouseEvent: {mouseEvent.EventType}");
-                                    MouseEventReceived?.Invoke(this, mouseEvent);
-                                    continue;
+                                    var keyboardEvent = JsonSerializer.Deserialize<KeyboardEventMessage>(messageText);
+                                    if (keyboardEvent != null)
+                                    {
+                                        RemoteCapture.Lib.Logger.Debug($"Deserialized KeyboardEvent: {keyboardEvent.EventType}, KeyCode={keyboardEvent.KeyCode}");
+                                        KeyboardEventReceived?.Invoke(this, keyboardEvent);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    RemoteCapture.Lib.Logger.Warning($"Failed to deserialize as KeyboardEvent: {ex.Message}");
                                 }
                             }
-                            catch (Exception ex)
+                            else if (messageText.Contains("\"NormalizedX\""))
                             {
-                                RemoteCapture.Lib.Logger.Warning($"Failed to deserialize as MouseEvent: {ex.Message}");
-                            }
-
-                            try
-                            {
-                                // Try to deserialize as KeyboardEventMessage
-                                var keyboardEvent = JsonSerializer.Deserialize<KeyboardEventMessage>(messageText);
-                                if (keyboardEvent != null)
+                                // This is a mouse event
+                                try
                                 {
-                                    KeyboardEventReceived?.Invoke(this, keyboardEvent);
+                                    var mouseEvent = JsonSerializer.Deserialize<MouseEventMessage>(messageText);
+                                    if (mouseEvent != null)
+                                    {
+                                        RemoteCapture.Lib.Logger.Debug($"Deserialized MouseEvent: {mouseEvent.EventType}");
+                                        MouseEventReceived?.Invoke(this, mouseEvent);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    RemoteCapture.Lib.Logger.Warning($"Failed to deserialize as MouseEvent: {ex.Message}");
                                 }
                             }
-                            catch { }
                         }
                     }
                     catch

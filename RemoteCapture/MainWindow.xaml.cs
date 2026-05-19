@@ -51,6 +51,10 @@ namespace RemoteCapture
             Logger.Info("Application started");
             Logger.Info($"Log file: {Logger.GetLogFilePath()}");
 
+            // Add keyboard event handlers
+            this.KeyDown += MainWindow_KeyDown;
+            this.KeyUp += MainWindow_KeyUp;
+
 #if DEBUG
             // Force graphicscapture.dll to load.
             var picker = new GraphicsCapturePicker();
@@ -270,6 +274,7 @@ namespace RemoteCapture
                 webSocketServer = new Lib.WebSocket.WebSocketServer(8080, 4);
                 webSocketServer.ClientCountChanged += WebSocketServer_ClientCountChanged;
                 webSocketServer.MouseEventReceived += WebSocketServer_MouseEventReceived;
+                webSocketServer.KeyboardEventReceived += WebSocketServer_KeyboardEventReceived;
                 await webSocketServer.StartAsync();
 
                 broadcastTimer = new DispatcherTimer();
@@ -439,6 +444,30 @@ namespace RemoteCapture
                 catch (Exception ex)
                 {
                     Logger.Error($"Mouse event execution error", ex);
+                }
+            });
+        }
+
+        private void WebSocketServer_KeyboardEventReceived(object sender, Lib.WebSocket.KeyboardEventMessage e)
+        {
+            Logger.Debug($"KeyboardEventReceived - EventType: {e.EventType}, KeyCode: {e.KeyCode}, AllowRemoteControl: {allowRemoteControl}");
+
+            if (!allowRemoteControl)
+            {
+                Logger.Warning("Remote control is NOT allowed - skipping keyboard event");
+                return;
+            }
+
+            Dispatcher.Invoke(() =>
+            {
+                try
+                {
+                    Lib.WebSocket.KeyboardSimulator.ExecuteKeyboardEvent(e);
+                    Logger.Info($"Keyboard {e.EventType} executed: KeyCode={e.KeyCode}");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Keyboard event execution error", ex);
                 }
             });
         }
@@ -649,6 +678,69 @@ namespace RemoteCapture
             }
 
             await webSocketClient.SendMouseEventAsync(mouseEvent);
+        }
+
+        // Keyboard event handlers
+        private async void MainWindow_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            // Only send keyboard events when on the receiver tab and connected
+            if (MainTabControl.SelectedIndex != 1 || webSocketClient == null || !webSocketClient.IsConnected)
+                return;
+
+            // Only send if the ReceiverGrid has focus (from mouse interaction)
+            if (!ReceiverGrid.IsFocused)
+                return;
+
+            // Don't send repeated key events
+            if (e.IsRepeat)
+                return;
+
+            var keyboardEvent = new Lib.WebSocket.KeyboardEventMessage
+            {
+                EventType = Lib.WebSocket.KeyboardEventType.KeyDown,
+                KeyCode = System.Windows.Input.KeyInterop.VirtualKeyFromKey(e.Key),
+                IsShiftPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftShift) ||
+                                 System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightShift),
+                IsCtrlPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftCtrl) ||
+                                System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightCtrl),
+                IsAltPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftAlt) ||
+                               System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightAlt),
+                IsWinPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LWin) ||
+                               System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RWin)
+            };
+
+            await webSocketClient.SendKeyboardEventAsync(keyboardEvent);
+            Logger.Info($"Sending Keyboard KeyDown: KeyCode={keyboardEvent.KeyCode}");
+            e.Handled = true;
+        }
+
+        private async void MainWindow_KeyUp(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            // Only send keyboard events when on the receiver tab and connected
+            if (MainTabControl.SelectedIndex != 1 || webSocketClient == null || !webSocketClient.IsConnected)
+                return;
+
+            // Only send if the ReceiverGrid has focus (from mouse interaction)
+            if (!ReceiverGrid.IsFocused)
+                return;
+
+            var keyboardEvent = new Lib.WebSocket.KeyboardEventMessage
+            {
+                EventType = Lib.WebSocket.KeyboardEventType.KeyUp,
+                KeyCode = System.Windows.Input.KeyInterop.VirtualKeyFromKey(e.Key),
+                IsShiftPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftShift) ||
+                                 System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightShift),
+                IsCtrlPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftCtrl) ||
+                                System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightCtrl),
+                IsAltPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftAlt) ||
+                               System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightAlt),
+                IsWinPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LWin) ||
+                               System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RWin)
+            };
+
+            await webSocketClient.SendKeyboardEventAsync(keyboardEvent);
+            Logger.Info($"Sending Keyboard KeyUp: KeyCode={keyboardEvent.KeyCode}");
+            e.Handled = true;
         }
     }
 }

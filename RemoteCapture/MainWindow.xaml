@@ -107,14 +107,15 @@
                         <TextBlock x:Name="ReceivedFramesText" Text="受信フレーム数: 0" Margin="5" />
                     </StackPanel>
 
-                    <Grid Grid.Column="1" Background="Black"
+                    <Grid x:Name="ReceiverGrid" Grid.Column="1" Background="Black"
                           MouseEnter="ReceivedImage_MouseEnter"
                           MouseLeave="ReceivedImage_MouseLeave"
                           MouseMove="ReceivedImage_MouseMove"
                           MouseLeftButtonDown="ReceivedImage_MouseLeftButtonDown"
                           MouseLeftButtonUp="ReceivedImage_MouseLeftButtonUp"
                           MouseRightButtonDown="ReceivedImage_MouseRightButtonDown"
-                          MouseRightButtonUp="ReceivedImage_MouseRightButtonUp">
+                          MouseRightButtonUp="ReceivedImage_MouseRightButtonUp"
+                          Focusable="True">
                         <Image x:Name="ReceivedImage" Stretch="Uniform" />
                         <TextBlock x:Name="NoImageText" Text="受信待機中..." 
                                    HorizontalAlignment="Center" VerticalAlignment="Center" 

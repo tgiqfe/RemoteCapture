@@ -20,41 +20,6 @@ namespace RemoteCapture.Lib.CaptureSampleCore
         private IDirect3DDevice _device;
         private BasicCapture _capture;
 
-        /// <summary>
-        /// キャプチャされたフレームデータが利用可能になったときに発生するイベント
-        /// </summary>
-        public event EventHandler<CapturedFrameEventArgs> FrameDataAvailable;
-
-        /// <summary>
-        /// 目標フレームレートを設定 (0 = 制限なし)
-        /// </summary>
-        public double TargetFrameRate
-        {
-            get => _capture?.TargetFrameRate ?? 0;
-            set
-            {
-                if (_capture != null)
-                {
-                    _capture.TargetFrameRate = value;
-                }
-            }
-        }
-
-        /// <summary>
-        /// プレビュー描画を有効にするかどうか
-        /// </summary>
-        public bool EnablePreview
-        {
-            get => _capture?.EnablePreview ?? true;
-            set
-            {
-                if (_capture != null)
-                {
-                    _capture.EnablePreview = value;
-                }
-            }
-        }
-
         public BasicSampleApplication(Compositor compositor)
         {
             _compositor = compositor;
@@ -104,29 +69,34 @@ namespace RemoteCapture.Lib.CaptureSampleCore
             StopCapture();
             _capture = new BasicCapture(_device, item);
 
-            // イベントハンドラを接続
-            _capture.FrameDataAvailable += OnCaptureFrameDataAvailable;
-
             var surface = _capture.CreateSurface(_compositor);
             _brush.Surface = surface;
 
             _capture.StartCapture();
         }
 
-        private void OnCaptureFrameDataAvailable(object sender, CapturedFrameEventArgs e)
-        {
-            // イベントを転送
-            FrameDataAvailable?.Invoke(this, e);
-        }
-
         public void StopCapture()
         {
-            if (_capture != null)
-            {
-                _capture.FrameDataAvailable -= OnCaptureFrameDataAvailable;
-                _capture.Dispose();
-            }
+            _capture?.Dispose();
             _brush.Surface = null;
+        }
+
+        public void SaveSnapshot(string filePath)
+        {
+            if (_capture == null)
+            {
+                throw new InvalidOperationException("Capture is not active.");
+            }
+            _capture.SaveSnapshot(filePath);
+        }
+
+        public byte[] GetCurrentFrameAsPng()
+        {
+            if (_capture == null)
+            {
+                return null;
+            }
+            return _capture.GetCurrentFrameAsPng();
         }
     }
 }

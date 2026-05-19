@@ -1,7 +1,10 @@
-﻿using SharpDX.Direct3D11;
-using SharpDX.DXGI;
+﻿using System;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.Marshalling;
 using Windows.Graphics.DirectX.Direct3D11;
+using Windows.UI.Composition;
+using SharpDX.Direct3D11;
+using SharpDX.DXGI;
 using WinRT;
 
 namespace RemoteCapture.Lib.WindowsRuntimeHelpers
@@ -102,61 +105,6 @@ namespace RemoteCapture.Lib.WindowsRuntimeHelpers
             var d3dPointer = access.GetInterface(ID3D11Texture2D);
             var d3dSurface = new Texture2D(d3dPointer);
             return d3dSurface;
-        }
-
-        public static byte[] CopyTexture2DToByteArray(SharpDX.Direct3D11.Device device, Texture2D texture)
-        {
-            var textureDesc = texture.Description;
-
-            // CPU読み取り可能なステージングテクスチャを作成
-            var stagingTextureDesc = new Texture2DDescription
-            {
-                Width = textureDesc.Width,
-                Height = textureDesc.Height,
-                MipLevels = 1,
-                ArraySize = 1,
-                Format = textureDesc.Format,
-                Usage = ResourceUsage.Staging,
-                SampleDescription = new SampleDescription(1, 0),
-                BindFlags = BindFlags.None,
-                CpuAccessFlags = CpuAccessFlags.Read,
-                OptionFlags = ResourceOptionFlags.None
-            };
-
-            using (var stagingTexture = new Texture2D(device, stagingTextureDesc))
-            {
-                // GPUからCPUアクセス可能なテクスチャにコピー
-                device.ImmediateContext.CopyResource(texture, stagingTexture);
-
-                // データをマップして読み取り
-                var dataBox = device.ImmediateContext.MapSubresource(stagingTexture, 0, MapMode.Read, SharpDX.Direct3D11.MapFlags.None);
-                try
-                {
-                    // ピクセルデータのサイズを計算 (BGRA8 = 4 bytes per pixel)
-                    int bytesPerPixel = 4; // Format.B8G8R8A8_UNorm
-                    int totalBytes = textureDesc.Width * textureDesc.Height * bytesPerPixel;
-                    byte[] pixelData = new byte[totalBytes];
-
-                    // 行ごとにデータをコピー (RowPitchを考慮)
-                    int rowPitch = dataBox.RowPitch;
-                    int rowWidth = textureDesc.Width * bytesPerPixel;
-
-                    for (int y = 0; y < textureDesc.Height; y++)
-                    {
-                        Marshal.Copy(
-                            dataBox.DataPointer + (y * rowPitch),
-                            pixelData,
-                            y * rowWidth,
-                            rowWidth);
-                    }
-
-                    return pixelData;
-                }
-                finally
-                {
-                    device.ImmediateContext.UnmapSubresource(stagingTexture, 0);
-                }
-            }
         }
     }
 }

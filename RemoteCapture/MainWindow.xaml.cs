@@ -1,46 +1,40 @@
 ﻿using RemoteCapture.Lib.CaptureSampleCore;
 using RemoteCapture.Lib.ScreenCapture;
-using RemoteCapture.Lib.WebRTC;
 using RemoteCapture.Lib.WindowsRuntimeHelpers;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO;
+using System.Numerics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Windows.Foundation.Metadata;
 using Windows.Graphics.Capture;
-using WinUIComposition = Windows.UI.Composition;
+using Windows.UI.Composition;
 
 namespace RemoteCapture
 {
     /// <summary>
-    /// Interaction logic for MainWindow.xaml
+    /// Interaction logic for MainWindow
     /// </summary>
     public partial class MainWindow : Window
     {
-        private nint _hwnd;
-        private WinUIComposition.Compositor _compositor;
+        private nint hwnd;
+        private Compositor compositor;
+        private CompositionTarget target;
+        private ContainerVisual root;
 
-        private BasicSampleApplication _sample;
+        private BasicSampleApplication sample;
         private ObservableCollection<Process> processes;
-        private ObservableCollection<MonitorInfo> _monitors;
+        private ObservableCollection<MonitorInfo> monitors;
 
-        // フレームデータ監視用
-        private int _frameCount = 0;
-        private DateTime _lastFpsUpdate = DateTime.UtcNow;
-        private double _currentFps = 0;
-
-        // 診断情報更新用タイマー
-        private System.Windows.Threading.DispatcherTimer? _diagnosticTimer;
-
-        // WebRTC
-        private WebRTCPeer? _webRtcPeer;
-        private WebRTCReceiver? _webRtcReceiver;
-
-        // モード管理
-        private bool _isSenderMode = true;
+        // WebSocket components
+        private Lib.WebSocket.WebSocketServer webSocketServer;
+        private Lib.WebSocket.WebSocketClient webSocketClient;
+        private DispatcherTimer broadcastTimer;
+        private int currentFps = 30;
+        private int receivedFrameCount = 0;
 
         public MainWindow()
         {
@@ -52,181 +46,92 @@ namespace RemoteCapture
 #endif
         }
 
-        private void Window_Loaded(object sender, RoutedEventArgs e)
+        /*
+        private async void PickerButton_Click(object sender, RoutedEventArgs e)
         {
-            var interopWindow = new WindowInteropHelper(this);
-            _hwnd = interopWindow.Handle;
-
-            InitComposition();
-            InitMonitorList();
-            InitDiagnosticTimer();
+            StopCapture();
+            WindowComboBox.SelectedIndex = -1;
+            MonitorComboBox.SelectedIndex = -1;
+            await StartPickerCaptureAsync();
         }
-
-        private void InitComposition()
-        {
-            // Create the compositor.
-            _compositor = new WinUIComposition.Compositor();
-
-            // Setup the rest of the sample application.
-            _sample = new BasicSampleApplication(_compositor);
-
-            // フレームデータイベントを購読
-            _sample.FrameDataAvailable += OnFrameDataAvailable;
-        }
-
-        private void InitMonitorList()
-        {
-            if (ApiInformation.IsApiContractPresent(typeof(Windows.Foundation.UniversalApiContract).FullName, 8))
-            {
-                _monitors = new ObservableCollection<MonitorInfo>(MonitorEnumerationHelper.GetMonitors());
-                MonitorComboBox.ItemsSource = _monitors;
-            }
-            else
-            {
-                MonitorComboBox.IsEnabled = false;
-                PrimaryMonitorButton.IsEnabled = false;
-            }
-        }
-
-        private void InitDiagnosticTimer()
-        {
-            // 1秒ごとに診断情報を更新
-            _diagnosticTimer = new System.Windows.Threading.DispatcherTimer();
-            _diagnosticTimer.Interval = TimeSpan.FromSeconds(1);
-            _diagnosticTimer.Tick += DiagnosticTimer_Tick;
-            _diagnosticTimer.Start();
-            Debug.WriteLine("Diagnostic timer started");
-        }
-
-        private void DiagnosticTimer_Tick(object? sender, EventArgs e)
-        {
-            try
-            {
-                if (_isSenderMode && _webRtcPeer != null)
-                {
-                    // 送信側の診断情報を追加
-                    var diagInfo = $" | Diag: Supplied={_webRtcPeer.FramesSupplied}, Encoded={_webRtcPeer.FramesEncoded}, Sent={_webRtcPeer.FramesSent}";
-                    if (!ConnectionStatusText.Text.Contains("Diag:"))
-                    {
-                        ConnectionStatusText.Text += diagInfo;
-                    }
-                    else
-                    {
-                        var parts = ConnectionStatusText.Text.Split(new[] { " | Diag:" }, StringSplitOptions.None);
-                        ConnectionStatusText.Text = parts[0] + diagInfo;
-                    }
-
-                    // 問題検出
-                    if (_webRtcPeer.FramesSupplied > 0 && _webRtcPeer.FramesEncoded == 0)
-                    {
-                        Debug.WriteLine("[DIAGNOSTIC] WARNING: Frames supplied but NOT encoded! Check FFmpeg encoder.");
-                    }
-                    if (_webRtcPeer.FramesEncoded > 0 && _webRtcPeer.FramesSent == 0)
-                    {
-                        Debug.WriteLine("[DIAGNOSTIC] WARNING: Frames encoded but NOT sent! Check PeerConnection.");
-                    }
-                }
-                else if (!_isSenderMode && _webRtcReceiver != null)
-                {
-                    // 受信側の診断情報を追加
-                    var diagInfo = $" | Diag: RTP={_webRtcReceiver.RtpFramesReceived}, Decoded={_webRtcReceiver.FramesDecoded}, Delivered={_webRtcReceiver.FramesDelivered}";
-                    if (!ReceiverConnectionStatusText.Text.Contains("Diag:"))
-                    {
-                        ReceiverConnectionStatusText.Text += diagInfo;
-                    }
-                    else
-                    {
-                        var parts = ReceiverConnectionStatusText.Text.Split(new[] { " | Diag:" }, StringSplitOptions.None);
-                        ReceiverConnectionStatusText.Text = parts[0] + diagInfo;
-                    }
-
-                    // 問題検出
-                    if (_webRtcReceiver.RtpFramesReceived > 0 && _webRtcReceiver.FramesDecoded == 0)
-                    {
-                        Debug.WriteLine("[DIAGNOSTIC] WARNING: RTP frames received but NOT decoded! Check FFmpeg decoder.");
-                    }
-                    if (_webRtcReceiver.FramesDecoded > 0 && _webRtcReceiver.FramesDelivered == 0)
-                    {
-                        Debug.WriteLine("[DIAGNOSTIC] WARNING: Frames decoded but NOT delivered to UI! Check event handler.");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error in diagnostic timer: {ex.Message}");
-            }
-        }
-
-        #region Action
-
-        private void ModeRadio_Checked(object sender, RoutedEventArgs e)
-        {
-            if (SenderModeRadio == null || ReceiverModeRadio == null)
-                return;
-
-            _isSenderMode = SenderModeRadio.IsChecked == true;
-
-            // UI表示切り替え
-            if (SenderControls != null)
-                SenderControls.Visibility = _isSenderMode ? Visibility.Visible : Visibility.Collapsed;
-            if (ReceiverControls != null)
-                ReceiverControls.Visibility = _isSenderMode ? Visibility.Collapsed : Visibility.Visible;
-            if (SenderSdpArea != null)
-                SenderSdpArea.Visibility = _isSenderMode ? Visibility.Visible : Visibility.Collapsed;
-            if (ReceiverSdpArea != null)
-                ReceiverSdpArea.Visibility = _isSenderMode ? Visibility.Collapsed : Visibility.Visible;
-
-            // プレビューエリアの切り替え
-            if (SenderVideoImage != null)
-                SenderVideoImage.Visibility = _isSenderMode ? Visibility.Visible : Visibility.Collapsed;
-            if (ReceiverVideoImage != null)
-                ReceiverVideoImage.Visibility = _isSenderMode ? Visibility.Collapsed : Visibility.Visible;
-            if (ReceiverWaitingMessage != null)
-                ReceiverWaitingMessage.Visibility = _isSenderMode ? Visibility.Collapsed : Visibility.Visible;
-
-            // 既存の接続をクリア
-            StopCurrentMode();
-
-            Debug.WriteLine($"Mode switched to: {(_isSenderMode ? "Sender" : "Receiver")}");
-        }
-
-        private void StopCurrentMode()
-        {
-            if (_isSenderMode)
-            {
-                _sample?.StopCapture();
-                _webRtcPeer?.CloseAsync().Wait();
-                _webRtcPeer = null;
-            }
-            else
-            {
-                _webRtcReceiver?.CloseAsync().Wait();
-                _webRtcReceiver = null;
-            }
-        }
+        */
 
         private void PrimaryMonitorButton_Click(object sender, RoutedEventArgs e)
         {
-            _sample.StopCapture();
+            StopCapture();
+            //WindowComboBox.SelectedIndex = -1;
             MonitorComboBox.SelectedIndex = -1;
+            StartPrimaryMonitorCapture();
+        }
 
-            Debug.WriteLine("Primary Monitor button clicked");
-            var monitor = MonitorEnumerationHelper.
-                GetMonitors().
-                Where(m => m.IsPrimary).
-                First();
-            var item = CaptureHelper.CreateItemForMonitor(monitor.Hmon);
-            if (item != null)
+        private void Window_Loaded(object sender, RoutedEventArgs e)
+        {
+            var interopWindow = new WindowInteropHelper(this);
+            hwnd = interopWindow.Handle;
+            var presentationSource = PresentationSource.FromVisual(this);
+            double dpiX = 1.0;
+            double dpiY = 1.0;
+            if (presentationSource != null)
             {
-                Debug.WriteLine($"Starting capture from primary monitor: {monitor.DeviceName}");
-                _sample.StartCaptureFromItem(item);
-                Debug.WriteLine("Capture started");
+                dpiX = presentationSource.CompositionTarget.TransformToDevice.M11;
+                dpiY = presentationSource.CompositionTarget.TransformToDevice.M22;
             }
-            else
+            var controlsWidth = (float)(ControlsGrid.ActualWidth * dpiX);
+
+            InitComposition(controlsWidth);
+            InitWindowList();
+            InitMonitorList();
+        }
+
+        private void StopButton_Click(object sender, RoutedEventArgs e)
+        {
+            StopCapture();
+            //WindowComboBox.SelectedIndex = -1;
+            MonitorComboBox.SelectedIndex = -1;
+        }
+
+        private void SnapshotButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
             {
-                Debug.WriteLine("Failed to create capture item");
+                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                var fileName = $"snapshot_{timestamp}.png";
+                var filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), fileName);
+
+                sample.SaveSnapshot(filePath);
+
+                MessageBox.Show($"Snapshot saved to:\n{filePath}", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to save snapshot:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
+
+        /*
+        private void WindowComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            var comboBox = (ComboBox)sender;
+            var process = (Process)comboBox.SelectedItem;
+
+            if (process != null)
+            {
+                StopCapture();
+                MonitorComboBox.SelectedIndex = -1;
+                var hwnd = process.MainWindowHandle;
+                try
+                {
+                    StartHwndCapture(hwnd);
+                }
+                catch (Exception)
+                {
+                    Debug.WriteLine($"Hwnd 0x{hwnd.ToInt32():X8} is not valid for capture!");
+                    processes.Remove(process);
+                    comboBox.SelectedIndex = -1;
+                }
+            }
+        }
+        */
 
         private void MonitorComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
@@ -235,397 +140,278 @@ namespace RemoteCapture
 
             if (monitor != null)
             {
-                Debug.WriteLine($"Monitor selected: {monitor.DeviceName}");
-                _sample.StopCapture();
+                StopCapture();
+                //WindowComboBox.SelectedIndex = -1;
                 var hmon = monitor.Hmon;
                 try
                 {
-                    var item = CaptureHelper.CreateItemForMonitor(hmon);
-                    if (item != null)
-                    {
-                        Debug.WriteLine($"Starting capture from monitor: {monitor.DeviceName}");
-                        _sample.StartCaptureFromItem(item);
-                        Debug.WriteLine("Capture started");
-                    }
-                    else
-                    {
-                        Debug.WriteLine("Failed to create capture item");
-                    }
+                    StartHmonCapture(hmon);
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    Debug.WriteLine($"Hmon 0x{hmon.ToInt32():X8} is not valid for capture! Exception: {ex.Message}");
-                    _monitors.Remove(monitor);
+                    Debug.WriteLine($"Hmon 0x{hmon.ToInt32():X8} is not valid for capture!");
+                    monitors.Remove(monitor);
                     comboBox.SelectedIndex = -1;
                 }
             }
         }
 
-        private void StopButton_Click(object sender, RoutedEventArgs e)
+        private void InitComposition(float controlsWidth)
         {
-            StopCurrentMode();
-            MonitorComboBox.SelectedIndex = -1;
+            // Create the compositor.
+            compositor = new Compositor();
 
-            // フレーム情報をリセット
-            ResetFrameDataDisplay();
+            // Create a target for the window.
+            target = compositor.CreateDesktopWindowTarget(hwnd, true);
 
-            // 受信情報もリセット
-            if (!_isSenderMode)
+            // Attach the root visual.
+            root = compositor.CreateContainerVisual();
+            root.RelativeSizeAdjustment = Vector2.One;
+            root.Size = new Vector2(-controlsWidth, 0);
+            root.Offset = new Vector3(controlsWidth, 0, 0);
+            target.Root = root;
+
+            // Setup the rest of the sample application.
+            sample = new BasicSampleApplication(compositor);
+            root.Children.InsertAtTop(sample.Visual);
+        }
+
+        private void InitWindowList()
+        {
+            if (ApiInformation.IsApiContractPresent(typeof(Windows.Foundation.UniversalApiContract).FullName, 8))
             {
-                ReceiverOfferSdpTextBox.Clear();
-                ReceiverLocalSdpTextBox.Clear();
-                ReceivedResolutionText.Text = "Resolution: -";
-                ReceivedFpsText.Text = "FPS: -";
-                ReceivedLastUpdateText.Text = "Last Update: -";
+                var processesWithWindows = Process.GetProcesses().
+                    Where(p => !string.IsNullOrWhiteSpace(p.MainWindowTitle) &&
+                        WindowEnumerationHelper.IsWindowValidForCapture(p.MainWindowHandle));
+                processes = new ObservableCollection<Process>(processesWithWindows);
+                //WindowComboBox.ItemsSource = processes;
+            }
+            else
+            {
+                //WindowComboBox.IsEnabled = false;
             }
         }
 
-        private void FrameRateComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        private void InitMonitorList()
         {
-            var comboBox = (ComboBox)sender;
-            var selectedItem = (ComboBoxItem)comboBox.SelectedItem;
-
-            if (selectedItem != null && _sample != null)
+            if (ApiInformation.IsApiContractPresent(typeof(Windows.Foundation.UniversalApiContract).FullName, 8))
             {
-                var fps = double.Parse(selectedItem.Tag.ToString());
-                _sample.TargetFrameRate = fps;
-
-                Debug.WriteLine($"Target frame rate set to: {(fps > 0 ? fps.ToString() : "Unlimited")} FPS");
+                monitors = new ObservableCollection<MonitorInfo>(MonitorEnumerationHelper.GetMonitors());
+                MonitorComboBox.ItemsSource = monitors;
+            }
+            else
+            {
+                MonitorComboBox.IsEnabled = false;
+                PrimaryMonitorButton.IsEnabled = false;
             }
         }
 
-        private void EnablePreviewCheckBox_Changed(object sender, RoutedEventArgs e)
+        private async Task StartPickerCaptureAsync()
         {
-            if (_sample != null)
+            var picker = new GraphicsCapturePicker();
+            picker.SetWindow(hwnd);
+            var item = await picker.PickSingleItemAsync();
+
+            if (item != null)
             {
-                _sample.EnablePreview = EnablePreviewCheckBox.IsChecked == true;
-                Debug.WriteLine($"Preview enabled: {_sample.EnablePreview}");
+                sample.StartCaptureFromItem(item);
             }
         }
 
-        private async void SetOfferButton_Click(object sender, RoutedEventArgs e)
+        private void StartHwndCapture(nint hwnd)
         {
-            if (!_isSenderMode)
+            var item = CaptureHelper.CreateItemForWindow(hwnd);
+            if (item != null)
             {
-                var offerSdp = ReceiverOfferSdpTextBox.Text.Trim();
-                if (string.IsNullOrEmpty(offerSdp))
-                {
-                    MessageBox.Show("Please paste the Offer SDP first.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                // WebRTC受信を初期化
-                if (_webRtcReceiver == null)
-                {
-                    _webRtcReceiver = new WebRTCReceiver();
-                    _webRtcReceiver.ConnectionStateChanged += OnReceiverConnectionStateChanged;
-                    _webRtcReceiver.LocalSdpReady += OnReceiverLocalSdpReady;
-                    _webRtcReceiver.ErrorOccurred += OnReceiverErrorOccurred;
-                    _webRtcReceiver.VideoFrameReceived += OnReceiverVideoFrameReceived;
-                }
-
-                SetOfferButton.IsEnabled = false;
-                var success = await _webRtcReceiver.SetRemoteOfferAndCreateAnswerAsync(offerSdp);
-                SetOfferButton.IsEnabled = true;
-
-                if (!success)
-                {
-                    MessageBox.Show("Failed to set remote offer. Check debug output.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
+                sample.StartCaptureFromItem(item);
             }
         }
 
-        #endregion
-
-        #region Receiver Event Handlers
-
-        private void OnReceiverConnectionStateChanged(object sender, WebRTCConnectionState state)
+        private void StartHmonCapture(nint hmon)
         {
-            Dispatcher.Invoke(() =>
+            var item = CaptureHelper.CreateItemForMonitor(hmon);
+            if (item != null)
             {
-                ReceiverConnectionStatusText.Text = $"Status: {state}";
-                Debug.WriteLine($"Receiver connection state: {state}");
-            });
+                sample.StartCaptureFromItem(item);
+            }
         }
 
-        private void OnReceiverLocalSdpReady(object sender, string sdp)
+        private void StartPrimaryMonitorCapture()
         {
-            Dispatcher.Invoke(() =>
-            {
-                ReceiverLocalSdpTextBox.Text = sdp;
-                Debug.WriteLine($"Receiver Answer SDP ready ({sdp.Length} chars)");
-            });
+            var monitor = MonitorEnumerationHelper.
+                GetMonitors().
+                Where(m => m.IsPrimary).
+                First();
+            StartHmonCapture(monitor.Hmon);
         }
 
-        private void OnReceiverErrorOccurred(object sender, string error)
+        private void StopCapture()
         {
-            Dispatcher.Invoke(() =>
-            {
-                MessageBox.Show($"Receiver error: {error}", "WebRTC Receiver Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                Debug.WriteLine($"Receiver error: {error}");
-            });
+            sample.StopCapture();
         }
 
-        private void OnReceiverVideoFrameReceived(object sender, VideoFrameEventArgs e)
+        // WebSocket Server (Sender) Methods
+        private async void StartServerButton_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                Dispatcher.Invoke(() =>
-                {
-                    // 待機メッセージを非表示
-                    if (ReceiverWaitingMessage != null)
-                        ReceiverWaitingMessage.Visibility = Visibility.Collapsed;
+                webSocketServer = new Lib.WebSocket.WebSocketServer(8080, 4);
+                webSocketServer.ClientCountChanged += WebSocketServer_ClientCountChanged;
+                await webSocketServer.StartAsync();
 
-                    // 受信映像情報を更新
-                    ReceivedResolutionText.Text = $"Resolution: {e.Width}x{e.Height}";
-                    ReceivedLastUpdateText.Text = $"Last Update: {DateTime.Now:HH:mm:ss.fff}";
+                broadcastTimer = new DispatcherTimer();
+                broadcastTimer.Interval = TimeSpan.FromMilliseconds(1000.0 / currentFps);
+                broadcastTimer.Tick += BroadcastTimer_Tick;
+                broadcastTimer.Start();
 
-                    // フレームデータをBitmapに変換して表示
-                    // FFmpegから来るフォーマットを確認してピクセルフォーマットを決定
-                    int stride = e.Width * 4; // BGRA = 4 bytes per pixel
-                    var bitmap = BitmapSource.Create(
-                        e.Width,
-                        e.Height,
-                        96, // dpiX
-                        96, // dpiY
-                        PixelFormats.Bgra32,
-                        null,
-                        e.Frame,
-                        stride
-                    );
-
-                    ReceiverVideoImage.Source = bitmap;
-
-                    Debug.WriteLine($"Displayed receiver frame: {e.Width}x{e.Height}, {e.Frame.Length} bytes");
-                });
+                ServerStatusText.Text = "サーバー実行中 (ws://localhost:8080/)";
+                StartServerButton.IsEnabled = false;
+                StopServerButton.IsEnabled = true;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error displaying receiver frame: {ex.Message}");
+                MessageBox.Show($"サーバー起動エラー:\n{ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
-        #endregion
-
-        #region Frame Data Monitoring
-
-        private void OnFrameDataAvailable(object sender, CapturedFrameEventArgs e)
+        private void StopServerButton_Click(object sender, RoutedEventArgs e)
         {
-            // フレームカウントを増加
-            _frameCount++;
+            StopWebSocketServer();
+        }
 
-            // FPS計算（1秒ごとに更新）
-            var now = DateTime.UtcNow;
-            var elapsed = (now - _lastFpsUpdate).TotalSeconds;
-            if (elapsed >= 1.0)
-            {
-                _currentFps = _frameCount / elapsed;
-                _frameCount = 0;
-                _lastFpsUpdate = now;
-            }
+        private void StopWebSocketServer()
+        {
+            broadcastTimer?.Stop();
+            webSocketServer?.Stop();
+            webSocketServer = null;
 
-            // UIスレッドで表示を更新
-            try
+            ServerStatusText.Text = "停止中";
+            ConnectedClientsText.Text = "接続クライアント数: 0 / 4";
+            StartServerButton.IsEnabled = true;
+            StopServerButton.IsEnabled = false;
+        }
+
+        private async void BroadcastTimer_Tick(object sender, EventArgs e)
+        {
+            if (webSocketServer != null && sample != null)
             {
-                Dispatcher.Invoke(() =>
+                try
                 {
-                    ResolutionText.Text = $"Resolution: {e.Width} x {e.Height}";
-                    DataSizeText.Text = $"Data Size: {e.PixelData.Length:N0} bytes ({e.PixelData.Length / 1024.0 / 1024.0:F2} MB)";
-                    FpsText.Text = $"FPS: {_currentFps:F1}";
-                    LastUpdateText.Text = $"Last Update: {e.Timestamp:HH:mm:ss.fff}";
-
-                    // 送信モードのプレビューをImageコントロールで表示
-                    if (_isSenderMode && SenderVideoImage != null)
+                    var frameData = sample.GetCurrentFrameAsPng();
+                    if (frameData != null)
                     {
-                        int stride = e.Width * 4; // BGRA = 4 bytes per pixel
-                        var bitmap = BitmapSource.Create(
-                            e.Width,
-                            e.Height,
-                            96, // dpiX
-                            96, // dpiY
-                            PixelFormats.Bgra32,
-                            null,
-                            e.PixelData,
-                            stride
-                        );
-
-                        SenderVideoImage.Source = bitmap;
+                        await webSocketServer.BroadcastImageAsync(frameData);
                     }
-                });
-
-                // デバッグ出力（最初のフレームと1秒ごと）
-                if (_frameCount == 1 || elapsed >= 1.0)
-                {
-                    Debug.WriteLine($"Frame: {e.Width}x{e.Height}, Size: {e.PixelData.Length} bytes, FPS: {_currentFps:F1}");
                 }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error updating UI: {ex.Message}");
-            }
-
-            // WebRTCでフレームを送信
-            if (_webRtcPeer != null)
-            {
-                if (_frameCount == 1)
+                catch (Exception ex)
                 {
-                    Debug.WriteLine($"Calling SupplyFrame: {e.Width}x{e.Height}, {e.PixelData.Length} bytes");
+                    Debug.WriteLine($"Broadcast error: {ex.Message}");
                 }
-                _webRtcPeer.SupplyFrame(e.PixelData, e.Width, e.Height);
             }
         }
 
-        private void ResetFrameDataDisplay()
+        private void WebSocketServer_ClientCountChanged(object sender, int count)
         {
-            _frameCount = 0;
-            _currentFps = 0;
-            _lastFpsUpdate = DateTime.UtcNow;
-
-            ResolutionText.Text = "Resolution: -";
-            DataSizeText.Text = "Data Size: -";
-            FpsText.Text = "FPS: -";
-            LastUpdateText.Text = "Last Update: -";
+            Dispatcher.Invoke(() =>
+            {
+                ConnectedClientsText.Text = $"接続クライアント数: {count} / 4";
+            });
         }
 
-        #endregion
-
-        #region WebRTC
-
-        private async void CreateOfferButton_Click(object sender, RoutedEventArgs e)
+        private void FpsSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            currentFps = (int)e.NewValue;
+            if (FpsValueText != null)
+            {
+                FpsValueText.Text = currentFps.ToString();
+            }
+
+            if (broadcastTimer != null)
+            {
+                broadcastTimer.Interval = TimeSpan.FromMilliseconds(1000.0 / currentFps);
+            }
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            base.OnClosed(e);
+            StopWebSocketServer();
+            webSocketClient?.Dispose();
+        }
+
+        // WebSocket Client (Receiver) Methods
+        private async void ConnectButton_Click(object sender, RoutedEventArgs e)
+        {
+            var serverAddress = ServerAddressTextBox.Text.Trim();
+            if (string.IsNullOrEmpty(serverAddress))
+            {
+                MessageBox.Show("サーバーアドレスを入力してください。", "エラー", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
             try
             {
-                // WebRTCPeerの初期化
-                if (_webRtcPeer == null)
-                {
-                    _webRtcPeer = new WebRTCPeer();
+                webSocketClient = new Lib.WebSocket.WebSocketClient();
+                webSocketClient.ImageReceived += WebSocketClient_ImageReceived;
+                webSocketClient.Connected += WebSocketClient_Connected;
+                webSocketClient.Disconnected += WebSocketClient_Disconnected;
 
-                    // イベントハンドラの設定
-                    _webRtcPeer.ConnectionStateChanged += OnWebRtcConnectionStateChanged;
-                    _webRtcPeer.LocalSdpReady += OnLocalSdpReady;
-                    _webRtcPeer.ErrorOccurred += OnWebRtcError;
-                }
+                await webSocketClient.ConnectAsync(serverAddress);
 
-                CreateOfferButton.IsEnabled = false;
-                ConnectionStatusText.Text = "Status: Creating Offer...";
-
-                // Offerの作成
-                var success = await _webRtcPeer.CreateOfferAsync();
-
-                if (!success)
-                {
-                    MessageBox.Show("Failed to create WebRTC offer", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    CreateOfferButton.IsEnabled = true;
-                }
+                ConnectButton.IsEnabled = false;
+                DisconnectButton.IsEnabled = true;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error creating offer: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                CreateOfferButton.IsEnabled = true;
-                ConnectionStatusText.Text = "Status: Error";
+                MessageBox.Show($"接続エラー:\n{ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+                webSocketClient?.Dispose();
+                webSocketClient = null;
             }
         }
 
-        private async void SetAnswerButton_Click(object sender, RoutedEventArgs e)
+        private async void DisconnectButton_Click(object sender, RoutedEventArgs e)
         {
-            Debug.WriteLine("=== SetAnswerButton_Click called ===");
-            try
+            if (webSocketClient != null)
             {
-                Debug.WriteLine($"Current mode: _isSenderMode={_isSenderMode}");
-
-                var remoteSdp = RemoteSdpTextBox.Text.Trim();
-                Debug.WriteLine($"Remote SDP length: {remoteSdp.Length}");
-
-                if (string.IsNullOrEmpty(remoteSdp))
-                {
-                    Debug.WriteLine("Remote SDP is empty");
-                    MessageBox.Show("Please paste the remote SDP answer", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                if (_webRtcPeer == null)
-                {
-                    Debug.WriteLine("WebRTC peer is null");
-                    MessageBox.Show("Please create an offer first", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                SetAnswerButton.IsEnabled = false;
-                ConnectionStatusText.Text = "Status: Setting Remote Answer...";
-
-                Debug.WriteLine("Calling SetRemoteDescriptionAsync with answer...");
-                var success = await _webRtcPeer.SetRemoteDescriptionAsync(remoteSdp, "answer");
-                Debug.WriteLine($"SetRemoteDescriptionAsync result: {success}");
-
-                if (success)
-                {
-                    ConnectionStatusText.Text = "Status: Connecting...";
-                    Debug.WriteLine("Remote answer set successfully, waiting for connection...");
-                }
-                else
-                {
-                    MessageBox.Show("Failed to set remote answer", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    SetAnswerButton.IsEnabled = true;
-                    ConnectionStatusText.Text = "Status: Error";
-                }
+                await webSocketClient.DisconnectAsync();
+                webSocketClient.Dispose();
+                webSocketClient = null;
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Exception in SetAnswerButton_Click: {ex.Message}\n{ex.StackTrace}");
-                MessageBox.Show($"Error setting answer: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                SetAnswerButton.IsEnabled = true;
-                ConnectionStatusText.Text = "Status: Error";
-            }
+
+            ConnectButton.IsEnabled = true;
+            DisconnectButton.IsEnabled = false;
         }
 
-        private void OnWebRtcConnectionStateChanged(object? sender, WebRTCConnectionState state)
+        private void WebSocketClient_ImageReceived(object sender, System.Windows.Media.Imaging.BitmapImage e)
         {
             Dispatcher.Invoke(() =>
             {
-                ConnectionStatusText.Text = $"Status: {state}";
-
-                // 接続状態に応じて色を変更
-                switch (state)
-                {
-                    case WebRTCConnectionState.Connected:
-                        ConnectionStatusText.Foreground = new SolidColorBrush(Colors.Green);
-                        break;
-                    case WebRTCConnectionState.Failed:
-                        ConnectionStatusText.Foreground = new SolidColorBrush(Colors.Red);
-                        CreateOfferButton.IsEnabled = true;
-                        SetAnswerButton.IsEnabled = true;
-                        break;
-                    case WebRTCConnectionState.Disconnected:
-                    case WebRTCConnectionState.Closed:
-                        ConnectionStatusText.Foreground = new SolidColorBrush(Colors.Gray);
-                        CreateOfferButton.IsEnabled = true;
-                        SetAnswerButton.IsEnabled = true;
-                        break;
-                    default:
-                        ConnectionStatusText.Foreground = new SolidColorBrush(Colors.Orange);
-                        break;
-                }
+                ReceivedImage.Source = e;
+                NoImageText.Visibility = Visibility.Collapsed;
+                receivedFrameCount++;
+                ReceivedFramesText.Text = $"受信フレーム数: {receivedFrameCount}";
             });
         }
 
-        private void OnLocalSdpReady(object? sender, string sdp)
+        private void WebSocketClient_Connected(object sender, EventArgs e)
         {
             Dispatcher.Invoke(() =>
             {
-                LocalSdpTextBox.Text = sdp;
-                MessageBox.Show("SDP Offer created! Copy the Local SDP and send it to the remote peer.", "SDP Ready", MessageBoxButton.OK, MessageBoxImage.Information);
+                ClientStatusText.Text = "接続中";
+                receivedFrameCount = 0;
+                ReceivedFramesText.Text = "受信フレーム数: 0";
             });
         }
 
-        private void OnWebRtcError(object? sender, string error)
+        private void WebSocketClient_Disconnected(object sender, EventArgs e)
         {
             Dispatcher.Invoke(() =>
             {
-                Debug.WriteLine($"WebRTC Error: {error}");
-                MessageBox.Show($"WebRTC Error: {error}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ClientStatusText.Text = "未接続";
+                ConnectButton.IsEnabled = true;
+                DisconnectButton.IsEnabled = false;
+                NoImageText.Visibility = Visibility.Visible;
             });
         }
-
-        #endregion
     }
 }

@@ -23,22 +23,80 @@ public class Worker : BackgroundService
         _logger.LogInformation("RemoteCapture Service is starting...");
 
         // Load configuration
-        var port = _configuration.GetValue<int>("RemoteCapture:WebSocketPort", 8080);
-        var maxClients = _configuration.GetValue<int>("RemoteCapture:MaxClients", 4);
         _frameRate = _configuration.GetValue<int>("RemoteCapture:FrameRate", 30);
         _jpegQuality = _configuration.GetValue<int>("RemoteCapture:JpegQuality", 75);
+
+        await base.StartAsync(cancellationToken);
+        _logger.LogInformation("RemoteCapture Service start initiated");
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            // Initialize WebSocket server and capture in ExecuteAsync
+            // to avoid timeout in StartAsync
+            await InitializeServicesAsync(stoppingToken);
+
+            var frameInterval = TimeSpan.FromMilliseconds(1000.0 / _frameRate);
+
+            _logger.LogInformation("RemoteCapture Service is running");
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    if (_webSocketServer != null && 
+                        _webSocketServer.IsRunning && 
+                        _webSocketServer.ConnectedClientCount > 0 &&
+                        _captureHelper != null)
+                    {
+                        // Capture and send frame
+                        var frameData = _captureHelper.GetCurrentFrameAsJpeg(_jpegQuality);
+                        if (frameData != null && frameData.Length > 0)
+                        {
+                            await _webSocketServer.BroadcastImageAsync(frameData);
+                        }
+                    }
+
+                    await Task.Delay(frameInterval, stoppingToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogError(ex, "Error in capture loop");
+                    await Task.Delay(1000, stoppingToken);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "Fatal error in ExecuteAsync - service will terminate");
+            throw;
+        }
+    }
+
+    private async Task InitializeServicesAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Initializing RemoteCapture services...");
+
+        var port = _configuration.GetValue<int>("RemoteCapture:WebSocketPort", 8080);
+        var maxClients = _configuration.GetValue<int>("RemoteCapture:MaxClients", 4);
         var monitorIndex = _configuration.GetValue<int>("RemoteCapture:MonitorIndex", 0);
 
         try
         {
             // Initialize WebSocket server
+            _logger.LogInformation($"Initializing WebSocket server on port {port}...");
             _webSocketServer = new WebSocketServer(port, maxClients);
             _webSocketServer.MouseEventReceived += OnMouseEventReceived;
             _webSocketServer.KeyboardEventReceived += OnKeyboardEventReceived;
             await _webSocketServer.StartAsync();
+            _logger.LogInformation("WebSocket server initialized successfully");
 
             // Initialize capture
+            _logger.LogInformation("Enumerating monitors...");
             var monitors = CaptureServiceHelper.GetMonitors().ToList();
+            _logger.LogInformation($"Found {monitors.Count} monitor(s)");
 
             if (monitors.Count == 0)
             {
@@ -49,52 +107,19 @@ public class Worker : BackgroundService
                 ? monitors[monitorIndex] 
                 : monitors[0];
 
-            _logger.LogInformation($"Capturing monitor: {selectedMonitor.DeviceName}");
+            _logger.LogInformation($"Selected monitor: {selectedMonitor.DeviceName} (Index: {monitorIndex})");
 
+            _logger.LogInformation("Starting capture helper...");
             _captureHelper = new CaptureServiceHelper();
             _captureHelper.StartCapture(selectedMonitor.Hmon);
+            _logger.LogInformation("Capture helper started successfully");
 
-            _logger.LogInformation("RemoteCapture Service started successfully");
+            _logger.LogInformation("RemoteCapture services initialized successfully");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to start RemoteCapture Service");
+            _logger.LogError(ex, "Failed to initialize RemoteCapture services");
             throw;
-        }
-
-        await base.StartAsync(cancellationToken);
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        var frameInterval = TimeSpan.FromMilliseconds(1000.0 / _frameRate);
-
-        _logger.LogInformation("RemoteCapture Service is running");
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
-                if (_webSocketServer != null && 
-                    _webSocketServer.IsRunning && 
-                    _webSocketServer.ConnectedClientCount > 0 &&
-                    _captureHelper != null)
-                {
-                    // Capture and send frame
-                    var frameData = _captureHelper.GetCurrentFrameAsJpeg(_jpegQuality);
-                    if (frameData != null && frameData.Length > 0)
-                    {
-                        await _webSocketServer.BroadcastImageAsync(frameData);
-                    }
-                }
-
-                await Task.Delay(frameInterval, stoppingToken);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogError(ex, "Error in capture loop");
-                await Task.Delay(1000, stoppingToken);
-            }
         }
     }
 

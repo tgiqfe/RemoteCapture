@@ -14,4 +14,8 @@
     <PackageReference Include="SharpDX.Direct3D11" Version="4.2.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\RemoteCapture.Lib\RemoteCapture.Lib.csproj" />
+  </ItemGroup>
+
 </Project>

@@ -9,7 +9,7 @@ using Windows.UI.Composition;
 
 namespace RemoteCapture.Lib.CaptureSampleCore
 {
-    internal class BasicSampleApplication
+    public class BasicSampleApplication
     {
         private Compositor _compositor;
         private ContainerVisual _root;

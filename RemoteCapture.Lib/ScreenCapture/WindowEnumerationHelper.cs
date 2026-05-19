@@ -5,7 +5,7 @@ using System.Text;
 
 namespace RemoteCapture.Lib.ScreenCapture
 {
-    internal static class WindowEnumerationHelper
+    public static class WindowEnumerationHelper
     {
         enum GetAncestorFlags
         {

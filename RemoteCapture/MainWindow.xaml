@@ -63,6 +63,11 @@
                             <Button x:Name="StartServerButton" Content="サーバー開始" Click="StartServerButton_Click" Margin="5,10,5,5" Background="LightGreen" />
                             <Button x:Name="StopServerButton" Content="サーバー停止" Click="StopServerButton_Click" Margin="5" Background="LightCoral" IsEnabled="False" />
 
+                            <Separator Margin="5,15,5,15" />
+
+                            <CheckBox x:Name="AllowRemoteControlCheckBox" Content="リモート操作を許可" Margin="5" 
+                                      IsEnabled="False" Checked="AllowRemoteControl_Changed" Unchecked="AllowRemoteControl_Changed" />
+
                             <TextBlock Text="接続状態:" FontWeight="Bold" Margin="5,15,5,5" />
                             <TextBlock x:Name="ServerStatusText" Text="停止中" Margin="5" />
                             <TextBlock Text="サーバーアドレス:" FontWeight="Bold" Margin="5,10,5,5" />
@@ -102,11 +107,18 @@
                         <TextBlock x:Name="ReceivedFramesText" Text="受信フレーム数: 0" Margin="5" />
                     </StackPanel>
 
-                    <Grid Grid.Column="1" Background="Black">
+                    <Grid Grid.Column="1" Background="Black"
+                          MouseEnter="ReceivedImage_MouseEnter"
+                          MouseLeave="ReceivedImage_MouseLeave"
+                          MouseMove="ReceivedImage_MouseMove"
+                          MouseLeftButtonDown="ReceivedImage_MouseLeftButtonDown"
+                          MouseLeftButtonUp="ReceivedImage_MouseLeftButtonUp"
+                          MouseRightButtonDown="ReceivedImage_MouseRightButtonDown"
+                          MouseRightButtonUp="ReceivedImage_MouseRightButtonUp">
                         <Image x:Name="ReceivedImage" Stretch="Uniform" />
                         <TextBlock x:Name="NoImageText" Text="受信待機中..." 
                                    HorizontalAlignment="Center" VerticalAlignment="Center" 
-                                   Foreground="White" FontSize="20" />
+                                   Foreground="White" FontSize="20" IsHitTestVisible="False" />
                     </Grid>
                 </Grid>
             </TabItem>

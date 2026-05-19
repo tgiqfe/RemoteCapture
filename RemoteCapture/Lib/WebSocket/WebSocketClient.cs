@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
@@ -134,6 +136,44 @@ namespace RemoteCapture.Lib.WebSocket
                 _clientWebSocket?.Dispose();
                 _cancellationTokenSource?.Dispose();
                 Disconnected?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        public async Task SendMouseEventAsync(MouseEventMessage mouseEvent)
+        {
+            if (!_isConnected || _clientWebSocket?.State != WebSocketState.Open)
+                return;
+
+            try
+            {
+                var json = JsonSerializer.Serialize(mouseEvent);
+                var bytes = Encoding.UTF8.GetBytes(json);
+                var segment = new ArraySegment<byte>(bytes);
+
+                await _clientWebSocket.SendAsync(segment, WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // Send failed
+            }
+        }
+
+        public async Task SendKeyboardEventAsync(KeyboardEventMessage keyboardEvent)
+        {
+            if (!_isConnected || _clientWebSocket?.State != WebSocketState.Open)
+                return;
+
+            try
+            {
+                var json = JsonSerializer.Serialize(keyboardEvent);
+                var bytes = Encoding.UTF8.GetBytes(json);
+                var segment = new ArraySegment<byte>(bytes);
+
+                await _clientWebSocket.SendAsync(segment, WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // Send failed
             }
         }
 

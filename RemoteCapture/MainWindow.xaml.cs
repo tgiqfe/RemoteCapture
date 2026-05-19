@@ -1,4 +1,5 @@
-﻿using RemoteCapture.Lib.CaptureSampleCore;
+﻿using RemoteCapture.Lib;
+using RemoteCapture.Lib.CaptureSampleCore;
 using RemoteCapture.Lib.ScreenCapture;
 using RemoteCapture.Lib.WindowsRuntimeHelpers;
 using System.Collections.ObjectModel;
@@ -14,7 +15,6 @@ using System.Windows.Threading;
 using Windows.Foundation.Metadata;
 using Windows.Graphics.Capture;
 using Windows.UI.Composition;
-using RemoteCapture.Lib;
 
 namespace RemoteCapture
 {

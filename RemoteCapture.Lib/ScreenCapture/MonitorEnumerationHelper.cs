@@ -6,7 +6,7 @@ using static RemoteCapture.Lib.ScreenCapture.MonitorEnumerationHelper;
 
 namespace RemoteCapture.Lib.ScreenCapture
 {
-    internal class MonitorEnumerationHelper
+    public class MonitorEnumerationHelper
     {
         delegate bool EnumMonitorsDelegate(nint hMonitor, nint hdcMonitor, ref RECT lprcMonitor, nint deData);
 

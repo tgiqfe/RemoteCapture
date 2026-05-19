@@ -4,7 +4,7 @@ using WinRT;
 
 namespace RemoteCapture.Lib.WindowsRuntimeHelpers
 {
-    internal static class CaptureHelper
+    public static class CaptureHelper
     {
         private static readonly Guid GraphicsCaptureItemGuid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");
 

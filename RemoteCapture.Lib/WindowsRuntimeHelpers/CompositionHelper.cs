@@ -4,7 +4,7 @@ using SharpDX.DXGI;
 using WinRT;
 namespace RemoteCapture.Lib.WindowsRuntimeHelpers
 {
-    internal static class CompositionHelper
+    public static class CompositionHelper
     {
         // Delegate for CreateDesktopWindowTarget function from VTable
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]

@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="RemoteCapture.DesktopDuplication/RemoteCapture.DesktopDuplication.csproj" />
+  <Project Path="RemoteCapture.Lib/RemoteCapture.Lib.csproj" />
   <Project Path="RemoteCapture.Service/RemoteCapture.Service.csproj" />
   <Project Path="RemoteCapture/RemoteCapture.csproj" />
 </Solution>

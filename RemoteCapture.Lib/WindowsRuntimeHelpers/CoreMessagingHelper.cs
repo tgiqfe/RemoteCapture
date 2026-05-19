@@ -3,7 +3,7 @@ using Windows.System;
 
 namespace RemoteCapture.Lib.WindowsRuntimeHelpers
 {
-    internal static class CoreMessagingHelper
+    public static class CoreMessagingHelper
     {
         enum DISPATCHERQUEUE_THREAD_APARTMENTTYPE
         {

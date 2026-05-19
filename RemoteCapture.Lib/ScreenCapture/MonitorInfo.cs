@@ -3,7 +3,7 @@ using Windows.Foundation;
 
 namespace RemoteCapture.Lib.ScreenCapture
 {
-    internal class MonitorInfo
+    public class MonitorInfo
     {
         public bool IsPrimary { get; set; }
         public Vector2 ScreenSize { get; set; }

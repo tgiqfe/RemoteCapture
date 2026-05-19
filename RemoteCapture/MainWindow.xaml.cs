@@ -51,10 +51,6 @@ namespace RemoteCapture
             Logger.Info("Application started");
             Logger.Info($"Log file: {Logger.GetLogFilePath()}");
 
-            // Add keyboard event handlers
-            this.KeyDown += MainWindow_KeyDown;
-            this.KeyUp += MainWindow_KeyUp;
-
 #if DEBUG
             // Force graphicscapture.dll to load.
             var picker = new GraphicsCapturePicker();
@@ -572,6 +568,9 @@ namespace RemoteCapture
                 {
                     grid.CaptureMouse();
                     grid.Focus();
+
+                    // Disable IME on the ReceiverGrid to prevent local IME input
+                    System.Windows.Input.InputMethod.SetIsInputMethodEnabled(grid, false);
                 }
             }
         }
@@ -743,24 +742,26 @@ namespace RemoteCapture
         }
 
         // Keyboard event handlers
-        private async void MainWindow_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        private async void ReceiverGrid_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
         {
-            // Only send keyboard events when on the receiver tab and connected
-            if (MainTabControl.SelectedIndex != 1 || webSocketClient == null || !webSocketClient.IsConnected)
-                return;
-
-            // Only send if the ReceiverGrid has focus (from mouse interaction)
-            if (!ReceiverGrid.IsFocused)
+            // Only send keyboard events when connected
+            if (webSocketClient == null || !webSocketClient.IsConnected)
                 return;
 
             // Don't send repeated key events
             if (e.IsRepeat)
+            {
+                e.Handled = true;
                 return;
+            }
+
+            // Get the actual key (handle IME keys specially)
+            var key = e.Key == System.Windows.Input.Key.ImeProcessed ? e.ImeProcessedKey : e.Key;
 
             var keyboardEvent = new Lib.WebSocket.KeyboardEventMessage
             {
                 EventType = Lib.WebSocket.KeyboardEventType.KeyDown,
-                KeyCode = System.Windows.Input.KeyInterop.VirtualKeyFromKey(e.Key),
+                KeyCode = System.Windows.Input.KeyInterop.VirtualKeyFromKey(key),
                 IsShiftPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftShift) ||
                                  System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightShift),
                 IsCtrlPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftCtrl) ||
@@ -772,24 +773,25 @@ namespace RemoteCapture
             };
 
             await webSocketClient.SendKeyboardEventAsync(keyboardEvent);
-            Logger.Info($"Sending Keyboard KeyDown: KeyCode={keyboardEvent.KeyCode}");
+            Logger.Info($"Sending Keyboard KeyDown: KeyCode={keyboardEvent.KeyCode} Key={e.Key} ImeProcessedKey={e.ImeProcessedKey} ActualKey={key}");
+
+            // Prevent the key from being processed locally
             e.Handled = true;
         }
 
-        private async void MainWindow_KeyUp(object sender, System.Windows.Input.KeyEventArgs e)
+        private async void ReceiverGrid_PreviewKeyUp(object sender, System.Windows.Input.KeyEventArgs e)
         {
-            // Only send keyboard events when on the receiver tab and connected
-            if (MainTabControl.SelectedIndex != 1 || webSocketClient == null || !webSocketClient.IsConnected)
+            // Only send keyboard events when connected
+            if (webSocketClient == null || !webSocketClient.IsConnected)
                 return;
 
-            // Only send if the ReceiverGrid has focus (from mouse interaction)
-            if (!ReceiverGrid.IsFocused)
-                return;
+            // Get the actual key (handle IME keys specially)
+            var key = e.Key == System.Windows.Input.Key.ImeProcessed ? e.ImeProcessedKey : e.Key;
 
             var keyboardEvent = new Lib.WebSocket.KeyboardEventMessage
             {
                 EventType = Lib.WebSocket.KeyboardEventType.KeyUp,
-                KeyCode = System.Windows.Input.KeyInterop.VirtualKeyFromKey(e.Key),
+                KeyCode = System.Windows.Input.KeyInterop.VirtualKeyFromKey(key),
                 IsShiftPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftShift) ||
                                  System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightShift),
                 IsCtrlPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftCtrl) ||
@@ -801,7 +803,15 @@ namespace RemoteCapture
             };
 
             await webSocketClient.SendKeyboardEventAsync(keyboardEvent);
-            Logger.Info($"Sending Keyboard KeyUp: KeyCode={keyboardEvent.KeyCode}");
+            Logger.Info($"Sending Keyboard KeyUp: KeyCode={keyboardEvent.KeyCode} Key={e.Key} ImeProcessedKey={e.ImeProcessedKey} ActualKey={key}");
+
+            // Prevent the key from being processed locally
+            e.Handled = true;
+        }
+
+        private void ReceiverGrid_PreviewTextInput(object sender, System.Windows.Input.TextCompositionEventArgs e)
+        {
+            // Prevent all text input on the receiver grid
             e.Handled = true;
         }
     }

@@ -98,5 +98,14 @@ namespace RemoteCapture.Lib.CaptureSampleCore
             }
             return _capture.GetCurrentFrameAsPng();
         }
+
+        public byte[] GetCurrentFrameAsJpeg(int quality = 75)
+        {
+            if (_capture == null)
+            {
+                return null;
+            }
+            return _capture.GetCurrentFrameAsJpeg(quality);
+        }
     }
 }

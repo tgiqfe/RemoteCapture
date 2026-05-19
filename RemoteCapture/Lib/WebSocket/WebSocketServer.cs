@@ -36,7 +36,7 @@ namespace RemoteCapture.Lib.WebSocket
                 return;
 
             _httpListener = new HttpListener();
-            _httpListener.Prefixes.Add($"http://localhost:{_port}/");
+            _httpListener.Prefixes.Add($"http://+:{_port}/");
             _httpListener.Start();
             _isRunning = true;
 

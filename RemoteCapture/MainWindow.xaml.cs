@@ -4,6 +4,8 @@ using RemoteCapture.Lib.WindowsRuntimeHelpers;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Numerics;
 using System.Windows;
 using System.Windows.Controls;
@@ -35,6 +37,8 @@ namespace RemoteCapture
         private DispatcherTimer broadcastTimer;
         private int currentFps = 30;
         private int receivedFrameCount = 0;
+        private bool useJpegCompression = false;
+        private int jpegQuality = 75;
 
         public MainWindow()
         {
@@ -264,13 +268,17 @@ namespace RemoteCapture
                 broadcastTimer.Tick += BroadcastTimer_Tick;
                 broadcastTimer.Start();
 
-                ServerStatusText.Text = "サーバー実行中 (ws://localhost:8080/)";
+                var ipAddresses = GetLocalIPAddresses();
+                var addressList = string.Join("\n", ipAddresses.Select(ip => $"ws://{ip}:8080/"));
+
+                ServerStatusText.Text = "サーバー実行中";
+                ServerAddressDisplay.Text = addressList;
                 StartServerButton.IsEnabled = false;
                 StopServerButton.IsEnabled = true;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"サーバー起動エラー:\n{ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"サーバー起動エラー:\n{ex.Message}\n\n管理者権限で実行してください。", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -286,9 +294,34 @@ namespace RemoteCapture
             webSocketServer = null;
 
             ServerStatusText.Text = "停止中";
+            ServerAddressDisplay.Text = "-";
             ConnectedClientsText.Text = "接続クライアント数: 0 / 4";
             StartServerButton.IsEnabled = true;
             StopServerButton.IsEnabled = false;
+        }
+
+        private List<string> GetLocalIPAddresses()
+        {
+            var ipAddresses = new List<string>();
+            try
+            {
+                var host = Dns.GetHostEntry(Dns.GetHostName());
+                foreach (var ip in host.AddressList)
+                {
+                    if (ip.AddressFamily == AddressFamily.InterNetwork)
+                    {
+                        ipAddresses.Add(ip.ToString());
+                    }
+                }
+            }
+            catch { }
+
+            if (ipAddresses.Count == 0)
+            {
+                ipAddresses.Add("localhost");
+            }
+
+            return ipAddresses;
         }
 
         private async void BroadcastTimer_Tick(object sender, EventArgs e)
@@ -297,7 +330,10 @@ namespace RemoteCapture
             {
                 try
                 {
-                    var frameData = sample.GetCurrentFrameAsPng();
+                    byte[] frameData = useJpegCompression 
+                        ? sample.GetCurrentFrameAsJpeg(jpegQuality)
+                        : sample.GetCurrentFrameAsPng();
+
                     if (frameData != null)
                     {
                         await webSocketServer.BroadcastImageAsync(frameData);
@@ -329,6 +365,25 @@ namespace RemoteCapture
             if (broadcastTimer != null)
             {
                 broadcastTimer.Interval = TimeSpan.FromMilliseconds(1000.0 / currentFps);
+            }
+        }
+
+        private void CompressionFormat_Changed(object sender, RoutedEventArgs e)
+        {
+            if (JpegRadioButton != null && JpegQualitySlider != null && JpegQualityLabel != null)
+            {
+                useJpegCompression = JpegRadioButton.IsChecked == true;
+                JpegQualitySlider.IsEnabled = useJpegCompression;
+                JpegQualityLabel.IsEnabled = useJpegCompression;
+            }
+        }
+
+        private void JpegQualitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            jpegQuality = (int)e.NewValue;
+            if (JpegQualityValueText != null)
+            {
+                JpegQualityValueText.Text = jpegQuality.ToString();
             }
         }
 

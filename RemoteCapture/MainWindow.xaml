@@ -115,6 +115,9 @@
                           MouseLeftButtonUp="ReceivedImage_MouseLeftButtonUp"
                           MouseRightButtonDown="ReceivedImage_MouseRightButtonDown"
                           MouseRightButtonUp="ReceivedImage_MouseRightButtonUp"
+                          MouseWheel="ReceivedImage_MouseWheel"
+                          PreviewMouseDown="ReceivedImage_PreviewMouseDown"
+                          PreviewMouseUp="ReceivedImage_PreviewMouseUp"
                           Focusable="True">
                         <Image x:Name="ReceivedImage" Stretch="Uniform" />
                         <TextBlock x:Name="NoImageText" Text="受信待機中..." 

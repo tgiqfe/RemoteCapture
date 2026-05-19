@@ -8,7 +8,10 @@ namespace RemoteCapture.Lib.WebSocket
         LeftDown,
         LeftUp,
         RightDown,
-        RightUp
+        RightUp,
+        MiddleDown,
+        MiddleUp,
+        WheelScroll
     }
 
     public class MouseEventMessage
@@ -18,5 +21,6 @@ namespace RemoteCapture.Lib.WebSocket
         public double NormalizedY { get; set; } // 0.0 ~ 1.0
         public int ScreenWidth { get; set; }
         public int ScreenHeight { get; set; }
+        public int WheelDelta { get; set; } // For scroll events (positive = up, negative = down)
     }
 }

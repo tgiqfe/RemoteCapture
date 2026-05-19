@@ -15,6 +15,9 @@ namespace RemoteCapture.Lib.WebSocket
         private const uint MOUSEEVENTF_LEFTUP = 0x0004;
         private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
         private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+        private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
+        private const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
+        private const uint MOUSEEVENTF_WHEEL = 0x0800;
         private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
 
         public static void MoveMouse(int x, int y)
@@ -40,6 +43,21 @@ namespace RemoteCapture.Lib.WebSocket
         public static void RightMouseUp()
         {
             mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        public static void MiddleMouseDown()
+        {
+            mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        public static void MiddleMouseUp()
+        {
+            mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        public static void MouseWheel(int delta)
+        {
+            mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (uint)delta, UIntPtr.Zero);
         }
 
         public static void ExecuteMouseEvent(MouseEventMessage mouseEvent)
@@ -70,6 +88,18 @@ namespace RemoteCapture.Lib.WebSocket
                 case MouseEventType.RightUp:
                     MoveMouse(screenX, screenY);
                     RightMouseUp();
+                    break;
+                case MouseEventType.MiddleDown:
+                    MoveMouse(screenX, screenY);
+                    MiddleMouseDown();
+                    break;
+                case MouseEventType.MiddleUp:
+                    MoveMouse(screenX, screenY);
+                    MiddleMouseUp();
+                    break;
+                case MouseEventType.WheelScroll:
+                    MoveMouse(screenX, screenY);
+                    MouseWheel(mouseEvent.WheelDelta);
                     break;
             }
         }

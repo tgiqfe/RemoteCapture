@@ -634,6 +634,31 @@ namespace RemoteCapture
             await SendMouseEventAsync(Lib.WebSocket.MouseEventType.RightUp, e);
         }
 
+        private async void ReceivedImage_MouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+        {
+            await SendMouseWheelEventAsync(e);
+        }
+
+        private async void ReceivedImage_PreviewMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton == System.Windows.Input.MouseButton.Middle)
+            {
+                var grid = sender as Grid;
+                grid?.CaptureMouse();
+                await SendMouseEventAsync(Lib.WebSocket.MouseEventType.MiddleDown, e);
+                e.Handled = true;
+            }
+        }
+
+        private async void ReceivedImage_PreviewMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton == System.Windows.Input.MouseButton.Middle)
+            {
+                await SendMouseEventAsync(Lib.WebSocket.MouseEventType.MiddleUp, e);
+                e.Handled = true;
+            }
+        }
+
         private async Task SendMouseEventAsync(Lib.WebSocket.MouseEventType eventType, System.Windows.Input.MouseEventArgs e)
         {
             if (webSocketClient == null || !webSocketClient.IsConnected || captureScreenWidth == 0 || captureScreenHeight == 0)
@@ -676,6 +701,43 @@ namespace RemoteCapture
                 int screenY = (int)(normalizedY * captureScreenHeight);
                 Logger.Info($"Sending Mouse {eventType}: ({screenX}, {screenY})");
             }
+
+            await webSocketClient.SendMouseEventAsync(mouseEvent);
+        }
+
+        private async Task SendMouseWheelEventAsync(System.Windows.Input.MouseWheelEventArgs e)
+        {
+            if (webSocketClient == null || !webSocketClient.IsConnected || captureScreenWidth == 0 || captureScreenHeight == 0)
+                return;
+
+            var position = e.GetPosition(ReceivedImage);
+            var imageWidth = ReceivedImage.ActualWidth;
+            var imageHeight = ReceivedImage.ActualHeight;
+
+            if (imageWidth == 0 || imageHeight == 0)
+                return;
+
+            // Calculate normalized coordinates (0.0 - 1.0)
+            var normalizedX = position.X / imageWidth;
+            var normalizedY = position.Y / imageHeight;
+
+            // Clamp to valid range
+            normalizedX = Math.Max(0.0, Math.Min(1.0, normalizedX));
+            normalizedY = Math.Max(0.0, Math.Min(1.0, normalizedY));
+
+            var mouseEvent = new Lib.WebSocket.MouseEventMessage
+            {
+                EventType = Lib.WebSocket.MouseEventType.WheelScroll,
+                NormalizedX = normalizedX,
+                NormalizedY = normalizedY,
+                ScreenWidth = captureScreenWidth,
+                ScreenHeight = captureScreenHeight,
+                WheelDelta = e.Delta
+            };
+
+            int screenX = (int)(normalizedX * captureScreenWidth);
+            int screenY = (int)(normalizedY * captureScreenHeight);
+            Logger.Info($"Sending Mouse Wheel: Delta={e.Delta} at ({screenX}, {screenY})");
 
             await webSocketClient.SendMouseEventAsync(mouseEvent);
         }

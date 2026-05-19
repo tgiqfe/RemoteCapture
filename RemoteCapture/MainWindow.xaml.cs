@@ -549,17 +549,33 @@ namespace RemoteCapture
 
         private void ReceivedImage_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
         {
-            // Only release mouse capture if no buttons are pressed
-            if (e.LeftButton == System.Windows.Input.MouseButtonState.Released && 
-                e.RightButton == System.Windows.Input.MouseButtonState.Released)
+            // Always release mouse capture when leaving the Grid area
+            var grid = sender as Grid;
+            if (grid != null && grid.IsMouseCaptured)
             {
-                var grid = sender as Grid;
-                grid?.ReleaseMouseCapture();
+                grid.ReleaseMouseCapture();
+                Logger.Debug("Mouse capture released - left Grid area");
             }
         }
 
         private async void ReceivedImage_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
         {
+            var grid = sender as Grid;
+            if (grid != null && grid.IsMouseCaptured)
+            {
+                // Check if mouse is outside the Grid bounds
+                var position = e.GetPosition(grid);
+                var isOutside = position.X < 0 || position.Y < 0 || 
+                                position.X > grid.ActualWidth || position.Y > grid.ActualHeight;
+
+                if (isOutside)
+                {
+                    grid.ReleaseMouseCapture();
+                    Logger.Debug($"Mouse capture released - outside Grid bounds: ({position.X:F0}, {position.Y:F0})");
+                    return; // Don't send mouse event if outside
+                }
+            }
+
             await SendMouseEventAsync(Lib.WebSocket.MouseEventType.Move, e);
         }
 
@@ -574,12 +590,6 @@ namespace RemoteCapture
         private async void ReceivedImage_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             await SendMouseEventAsync(Lib.WebSocket.MouseEventType.LeftUp, e);
-            // Release capture if no other buttons are pressed
-            if (e.RightButton == System.Windows.Input.MouseButtonState.Released)
-            {
-                var grid = sender as Grid;
-                grid?.ReleaseMouseCapture();
-            }
         }
 
         private async void ReceivedImage_MouseRightButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -593,12 +603,6 @@ namespace RemoteCapture
         private async void ReceivedImage_MouseRightButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             await SendMouseEventAsync(Lib.WebSocket.MouseEventType.RightUp, e);
-            // Release capture if no other buttons are pressed
-            if (e.LeftButton == System.Windows.Input.MouseButtonState.Released)
-            {
-                var grid = sender as Grid;
-                grid?.ReleaseMouseCapture();
-            }
         }
 
         private async Task SendMouseEventAsync(Lib.WebSocket.MouseEventType eventType, System.Windows.Input.MouseEventArgs e)

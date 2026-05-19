@@ -6,6 +6,7 @@
     <UserSecretsId>dotnet-RemoteCapture.Service-2aa96782-1bb4-44b5-893f-8cf9acb01f97</UserSecretsId>
     <SupportedOSPlatformVersion>10.0.22000.0</SupportedOSPlatformVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,5 +18,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\RemoteCapture.Lib\RemoteCapture.Lib.csproj" />
+    <ProjectReference Include="..\RemoteCapture.DesktopDuplication\RemoteCapture.DesktopDuplication.csproj" />
   </ItemGroup>
 </Project>

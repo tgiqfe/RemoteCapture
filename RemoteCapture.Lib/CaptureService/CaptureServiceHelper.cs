@@ -104,10 +104,15 @@ namespace RemoteCapture.Lib.CaptureService
             lock (_frameLock)
             {
                 if (_lastFrame == null || _d3dDevice == null)
+                {
+                    Logger.Debug("GetCurrentFrameAsJpeg: No frame available (_lastFrame or _d3dDevice is null)");
                     return null;
+                }
 
                 try
                 {
+                    Logger.Debug($"GetCurrentFrameAsJpeg: Starting JPEG encoding (size: {_lastSize.Width}x{_lastSize.Height}, quality: {quality})");
+
                     var dataBox = _d3dDevice.ImmediateContext.MapSubresource(
                         _lastFrame,
                         0,
@@ -152,15 +157,19 @@ namespace RemoteCapture.Lib.CaptureService
                             .First(codec => codec.FormatID == System.Drawing.Imaging.ImageFormat.Jpeg.Guid);
 
                         bitmap.Save(memoryStream, jpegCodec, encoderParameters);
-                        return memoryStream.ToArray();
+                        var result = memoryStream.ToArray();
+
+                        Logger.Debug($"GetCurrentFrameAsJpeg: JPEG encoding completed, size: {result.Length} bytes");
+                        return result;
                     }
                     finally
                     {
                         _d3dDevice.ImmediateContext.UnmapSubresource(_lastFrame, 0);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Logger.Error($"GetCurrentFrameAsJpeg: Error during JPEG encoding - {ex.GetType().Name}: {ex.Message}");
                     return null;
                 }
             }

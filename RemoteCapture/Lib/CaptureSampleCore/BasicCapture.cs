@@ -2,6 +2,7 @@
 using SharpDX.DXGI;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using Windows.Devices.HumanInterfaceDevice;
 using Windows.Graphics;
@@ -11,17 +12,6 @@ using Windows.UI.Composition;
 
 namespace RemoteCapture.Lib.CaptureSampleCore
 {
-    /// <summary>
-    /// キャプチャされたフレームデータを格納するクラス
-    /// </summary>
-    public class CapturedFrameEventArgs : EventArgs
-    {
-        public byte[] PixelData { get; set; }
-        public int Width { get; set; }
-        public int Height { get; set; }
-        public DateTime Timestamp { get; set; }
-    }
-
     internal class BasicCapture : IDisposable
     {
         private GraphicsCaptureItem _item;
@@ -32,39 +22,7 @@ namespace RemoteCapture.Lib.CaptureSampleCore
         private IDirect3DDevice _device;
         private SharpDX.Direct3D11.Device _d3dDevice;
         private SharpDX.DXGI.SwapChain1 _swapChain;
-
-        // フレームレート制御用
-        private DateTime _lastFrameTime = DateTime.MinValue;
-        private double _targetFrameIntervalMs = 0; // 0 = 制限なし
-
-        /// <summary>
-        /// プレビュー描画を有効にするかどうか
-        /// </summary>
-        public bool EnablePreview { get; set; } = true;
-
-        /// <summary>
-        /// キャプチャされたフレームデータが利用可能になったときに発生するイベント
-        /// </summary>
-        public event EventHandler<CapturedFrameEventArgs> FrameDataAvailable;
-
-        /// <summary>
-        /// 目標フレームレートを設定 (0 = 制限なし)
-        /// </summary>
-        public double TargetFrameRate
-        {
-            get => _targetFrameIntervalMs > 0 ? 1000.0 / _targetFrameIntervalMs : 0;
-            set
-            {
-                if (value <= 0)
-                {
-                    _targetFrameIntervalMs = 0; // 制限なし
-                }
-                else
-                {
-                    _targetFrameIntervalMs = 1000.0 / value; // ミリ秒に変換
-                }
-            }
-        }
+        private SharpDX.Direct3D11.Texture2D _lastFrame;
 
         public BasicCapture(IDirect3DDevice device, GraphicsCaptureItem item)
         {
@@ -126,65 +84,28 @@ namespace RemoteCapture.Lib.CaptureSampleCore
                         _lastSize.Height,
                         SharpDX.DXGI.Format.B8G8R8A8_UNorm,
                         SharpDX.DXGI.SwapChainFlags.None);
+
+                    _lastFrame?.Dispose();
+                    _lastFrame = null;
                 }
 
                 using (var backBuffer = _swapChain.GetBackBuffer<SharpDX.Direct3D11.Texture2D>(0))
                 using (var bitmap = Direct3D11Helper.CreateSharpDXTexture2D(frame.Surface))
                 {
-                    // プレビューが有効な場合のみGPUコピーを実行
-                    if (EnablePreview)
-                    {
-                        _d3dDevice.ImmediateContext.CopyResource(bitmap, backBuffer);
-                    }
+                    _d3dDevice.ImmediateContext.CopyResource(bitmap, backBuffer);
 
-                    // フレームレート制限のチェック
-                    bool shouldProcessFrame = true;
-                    if (_targetFrameIntervalMs > 0)
-                    {
-                        var now = DateTime.UtcNow;
-                        var elapsed = (now - _lastFrameTime).TotalMilliseconds;
-
-                        if (elapsed < _targetFrameIntervalMs)
-                        {
-                            shouldProcessFrame = false; // スキップ
-                        }
-                        else
-                        {
-                            _lastFrameTime = now;
-                        }
-                    }
-
-                    // ピクセルデータを抽出してイベントを発生
-                    if (shouldProcessFrame && FrameDataAvailable != null)
-                    {
-                        try
-                        {
-                            byte[] pixelData = Direct3D11Helper.CopyTexture2DToByteArray(_d3dDevice, bitmap);
-
-                            var eventArgs = new CapturedFrameEventArgs
-                            {
-                                PixelData = pixelData,
-                                Width = _lastSize.Width,
-                                Height = _lastSize.Height,
-                                Timestamp = DateTime.UtcNow
-                            };
-
-                            FrameDataAvailable?.Invoke(this, eventArgs);
-                        }
-                        catch (Exception ex)
-                        {
-                            // ピクセルデータの抽出エラーは無視して続行
-                            System.Diagnostics.Debug.WriteLine($"Error extracting pixel data: {ex.Message}");
-                        }
-                    }
+                    _lastFrame?.Dispose();
+                    var desc = bitmap.Description;
+                    desc.BindFlags = SharpDX.Direct3D11.BindFlags.None;
+                    desc.CpuAccessFlags = SharpDX.Direct3D11.CpuAccessFlags.Read;
+                    desc.Usage = SharpDX.Direct3D11.ResourceUsage.Staging;
+                    desc.OptionFlags = SharpDX.Direct3D11.ResourceOptionFlags.None;
+                    _lastFrame = new SharpDX.Direct3D11.Texture2D(_d3dDevice, desc);
+                    _d3dDevice.ImmediateContext.CopyResource(bitmap, _lastFrame);
                 }
             }
 
-            // プレビューが有効な場合のみPresentを実行
-            if (EnablePreview)
-            {
-                _swapChain.Present(0, SharpDX.DXGI.PresentFlags.None);
-            }
+            _swapChain.Present(0, SharpDX.DXGI.PresentFlags.None);
             if (newSize)
             {
                 _framePool.Recreate(
@@ -195,6 +116,107 @@ namespace RemoteCapture.Lib.CaptureSampleCore
             }
         }
 
+        public void SaveSnapshot(string filePath)
+        {
+            if (_lastFrame == null)
+            {
+                throw new InvalidOperationException("No frame has been captured yet.");
+            }
+
+            var dataBox = _d3dDevice.ImmediateContext.MapSubresource(
+                _lastFrame,
+                0,
+                SharpDX.Direct3D11.MapMode.Read,
+                SharpDX.Direct3D11.MapFlags.None);
+
+            try
+            {
+                var width = _lastSize.Width;
+                var height = _lastSize.Height;
+                var stride = dataBox.RowPitch;
+
+                using var bitmap = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                var bitmapData = bitmap.LockBits(
+                    new System.Drawing.Rectangle(0, 0, width, height),
+                    System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+                unsafe
+                {
+                    var src = (byte*)dataBox.DataPointer;
+                    var dst = (byte*)bitmapData.Scan0;
+
+                    for (int y = 0; y < height; y++)
+                    {
+                        Buffer.MemoryCopy(
+                            src + y * stride,
+                            dst + y * bitmapData.Stride,
+                            bitmapData.Stride,
+                            width * 4);
+                    }
+                }
+
+                bitmap.UnlockBits(bitmapData);
+                bitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+            }
+            finally
+            {
+                _d3dDevice.ImmediateContext.UnmapSubresource(_lastFrame, 0);
+            }
+        }
+
+        public byte[] GetCurrentFrameAsPng()
+        {
+            if (_lastFrame == null)
+            {
+                return null;
+            }
+
+            var dataBox = _d3dDevice.ImmediateContext.MapSubresource(
+                _lastFrame,
+                0,
+                SharpDX.Direct3D11.MapMode.Read,
+                SharpDX.Direct3D11.MapFlags.None);
+
+            try
+            {
+                var width = _lastSize.Width;
+                var height = _lastSize.Height;
+                var stride = dataBox.RowPitch;
+
+                using var bitmap = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                var bitmapData = bitmap.LockBits(
+                    new System.Drawing.Rectangle(0, 0, width, height),
+                    System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+                unsafe
+                {
+                    var src = (byte*)dataBox.DataPointer;
+                    var dst = (byte*)bitmapData.Scan0;
+
+                    for (int y = 0; y < height; y++)
+                    {
+                        Buffer.MemoryCopy(
+                            src + y * stride,
+                            dst + y * bitmapData.Stride,
+                            bitmapData.Stride,
+                            width * 4);
+                    }
+                }
+
+                bitmap.UnlockBits(bitmapData);
+
+                using var memoryStream = new MemoryStream();
+                bitmap.Save(memoryStream, System.Drawing.Imaging.ImageFormat.Png);
+                return memoryStream.ToArray();
+            }
+            finally
+            {
+                _d3dDevice.ImmediateContext.UnmapSubresource(_lastFrame, 0);
+            }
+        }
+
         #region Dispose Pattern
 
         public void Dispose()
@@ -202,6 +224,7 @@ namespace RemoteCapture.Lib.CaptureSampleCore
             _session?.Dispose();
             _framePool?.Dispose();
             _swapChain?.Dispose();
+            _lastFrame?.Dispose();
             _d3dDevice?.Dispose();
         }
 

@@ -1,6 +1,5 @@
 <Solution>
-  <Project Path="RemoteCapture.DesktopDuplication/RemoteCapture.DesktopDuplication.csproj" />
-  <Project Path="RemoteCapture.Lib/RemoteCapture.Lib.csproj" />
-  <Project Path="RemoteCapture.Service/RemoteCapture.Service.csproj" />
+  <Project Path="RemoteCapture.Service/RemoteCapture.Service.csproj" Id="00bf0b0a-5c97-4a2a-b731-7e510a1212c5" />
+  <Project Path="RemoteCapture.Viewer/RemoteCapture.Viewer.csproj" Id="2a9e4f7f-b9ff-4672-9941-7b65ecde753f" />
   <Project Path="RemoteCapture/RemoteCapture.csproj" />
 </Solution>

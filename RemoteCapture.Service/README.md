@@ -1,196 +1,237 @@
 # RemoteCapture.Service
 
-RemoteCapture.Serviceは、Windowsサービスとしてモニターキャプチャの送信側を実装したプロジェクトです。
+RemoteCapture.Serviceは、コンソールアプリケーションとしても、Windowsサービスとしても実行できます。
 
-## 機能
-
-- モニターのリアルタイムキャプチャ
-- WebSocketサーバーによる画像配信（JPEG圧縮）
-- リモートマウス・キーボード操作の受信と実行
-- 設定可能なフレームレート、画質、ポート番号
-
-## 設定 (appsettings.json)
-
-```json
-{
-  "RemoteCapture": {
-	"WebSocketPort": 8080,        // WebSocketサーバーのポート番号
-	"MaxClients": 4,               // 最大接続クライアント数
-	"FrameRate": 30,               // フレームレート (fps)
-	"JpegQuality": 75,             // JPEG画質 (1-100)
-	"MonitorIndex": 0              // キャプチャするモニターのインデックス (0から開始)
-  }
-}
-```
-
-## Windowsサービスとしてのインストール
-
-### 前提条件
-
-- Windows 10/11 (バージョン 10.0.22000.0 以降)
-- .NET 10.0 ランタイム
-- 管理者権限
-
-### 重要: 実行アカウントについて
-
-RemoteCapture.Serviceは **Windows Graphics Capture API** を使用して画面をキャプチャします。このAPIはアクティブユーザーセッション（対話型セッション）でのみ動作するため、サービスは以下のいずれかの方法で実行する必要があります:
-
-1. **推奨**: 現在ログインしているユーザーアカウントでサービスを実行
-2. LocalSystemアカウント + 対話デスクトップの許可（Windows Vista以降では制限があります）
-
-**注意**: 
-- LocalSystemアカウント（セッション0）では、通常の画面キャプチャは動作しません
-- ログイン画面のキャプチャは技術的に困難です
-- 最も確実な方法は、**現在のユーザーアカウントでサービスを実行**することです
-
-### インストール手順
-
-1. プロジェクトをビルドして発行します:
+## コンソールアプリケーションとして実行
 
 ```powershell
-dotnet publish -c Release -o C:\RemoteCaptureService
+.\RemoteCapture.Service.exe
 ```
 
-2. **推奨**: 現在ログインしているユーザーアカウントでサービスを作成します:
+通常のコンソールアプリとして実行されます。Ctrl+Cで終了できます。
+
+## Windowsサービスとして実行
+
+### 重要: GDIスクリーンキャプチャの制限
+
+このサービスはGDI (`Graphics.CopyFromScreen()`) を使用してスクリーンキャプチャを行います。
+
+### 2つの実行方法
+
+#### 方法1: ユーザーアカウントでサービスを実行（推奨・簡単）
+
+ログオンしているユーザーアカウントでサービスを実行します。
+
+**メリット**:
+- 設定が簡単
+- ユーザーデスクトップを直接キャプチャ可能
+
+**デメリット**:
+- ユーザーがログオフするとサービスが停止する可能性がある
+- LogonUI（UAC画面、ロック画面等）はキャプチャできない
+
+#### 方法2: SYSTEMアカウント + アクティブセッションで実行（高度）
+
+NT AUTHORITY\SYSTEMアカウントで、アクティブユーザーセッション内で実行します。
+
+**メリット**:
+- ユーザーデスクトップをキャプチャ可能
+- LogonUI/Winlogon（UAC、ログイン画面、Ctrl+Alt+Del画面等）もキャプチャ可能
+- ユーザーログオフの影響を受けない
+
+**デメリット**:
+- 設定が複雑
+- サードパーティツール（PsExec、PowerRunAsSystem等）が必要
+
+### サービスの登録と設定手順
+
+#### 方法1の手順: ユーザーアカウントでサービス実行
+
+##### 1. サービスの登録
+
+管理者権限でPowerShellを開き、以下のコマンドを実行します：
 
 ```powershell
-sc.exe create RemoteCaptureService binPath="C:\RemoteCaptureService\RemoteCapture.Service.exe" obj=".\ユーザー名" password="パスワード" start=auto
+# サービスを作成
+$servicePath = "C:\Path\To\RemoteCapture.Service.exe"
+New-Service -Name "RemoteCaptureService" `
+			-BinaryPathName $servicePath `
+			-DisplayName "RemoteCapture Service" `
+			-Description "Screen capture service via WebSocket" `
+			-StartupType Manual
 ```
 
-または、ドメインアカウントの場合:
+##### 2. サービスのログオンアカウント設定
+
+**GUIから設定**:
+
+1. `Win + R` → `services.msc` を実行
+2. 「RemoteCapture Service」を探して右クリック → プロパティ
+3. 「ログオン」タブを選択
+4. 「アカウント」を選択
+5. 「参照」ボタンをクリック
+6. ログオンしているユーザー名を入力（例: `.\UserName`）
+7. パスワードを入力
+8. 「OK」をクリック
+
+**PowerShellから設定**:
 
 ```powershell
-sc.exe create RemoteCaptureService binPath="C:\RemoteCaptureService\RemoteCapture.Service.exe" obj="ドメイン\ユーザー名" password="パスワード" start=auto
+# サービスの実行アカウントを変更
+$serviceName = "RemoteCaptureService"
+$username = ".\YourUserName"  # ドメインユーザーの場合は "DOMAIN\UserName"
+$password = "YourPassword"
+
+# sc.exeを使用してログオンアカウントを設定
+sc.exe config $serviceName obj= $username password= $password
 ```
 
-**参考**: LocalSystemアカウントで実行する場合（非推奨、画面キャプチャが動作しない可能性があります）:
+##### 3. サービスの開始
 
 ```powershell
-sc.exe create RemoteCaptureService binPath="C:\RemoteCaptureService\RemoteCapture.Service.exe" obj=LocalSystem type=own
+Start-Service -Name "RemoteCaptureService"
 ```
 
-3. サービスを開始します:
+#### 方法2の手順: SYSTEMアカウント + アクティブセッション
+
+この方法では、PowerRunAsSystemなどのツールを使用します。
+
+##### 前提条件
+
+PowerRunAsSystemをインストール：
 
 ```powershell
-sc.exe start RemoteCaptureService
+Install-Module -Name PowerRunAsSystem
 ```
 
-### アンインストール手順
+##### 実行手順
 
-1. サービスを停止します:
+1. **管理者権限でPowerShellを起動**
+
+2. **SYSTEMアカウントのPowerShellセッションを開始**:
 
 ```powershell
-sc.exe stop RemoteCaptureService
+Invoke-InteractiveSystemPowerShell
 ```
 
-2. サービスを削除します:
+新しいPowerShellウィンドウが「NT AUTHORITY\System」として開きます。
+
+3. **SYSTEMセッションからサービスを起動**:
+
+新しく開いたSYSTEM権限のPowerShellで：
 
 ```powershell
-sc.exe delete RemoteCaptureService
+cd "C:\Path\To\RemoteCapture.Service"
+.\RemoteCapture.Service.exe
 ```
 
-## 使用方法
+この状態で、ユーザーデスクトップとLogonUI（UAC画面、ロック画面等）の両方をキャプチャできます。
 
-1. Windowsサービスとしてインストールして実行します
-2. WebSocketクライアント（RemoteCapture.exeなど）で `ws://localhost:8080` に接続します
-3. リアルタイムでモニター画面が配信されます
-4. マウスとキーボードのイベントを送信すると、サービス側で実行されます
+##### 代替方法: PsExecを使用
 
-## ログ
+Sysinternals PsExecを使用する場合：
 
-サービスのログはWindowsイベントビューアーまたはコンソール出力で確認できます。
+```powershell
+# PsExecダウンロード
+# https://docs.microsoft.com/en-us/sysinternals/downloads/psexec
+
+# アクティブセッションでSYSTEMとして実行
+PsExec.exe -s -i 1 "C:\Path\To\RemoteCapture.Service.exe"
+```
+
+`-i 1` の数字はセッションIDです。現在のセッションIDを確認するには：
+
+```powershell
+query user
+```
+
+#### 4. サービスの状態確認
+
+```powershell
+Get-Service -Name "RemoteCaptureService"
+```
+
+### サービスの削除
+
+```powershell
+# サービスの停止
+Stop-Service -Name "RemoteCaptureService"
+
+# サービスの削除
+sc.exe delete "RemoteCaptureService"
+```
+
+## ポート設定
+
+デフォルトでは `http://0.0.0.0:5000` でリスニングします。
+外部からの接続を許可するため、Windowsファイアウォールで以下のポートを開放してください：
+
+```powershell
+# ファイアウォール規則を追加
+New-NetFirewallRule -DisplayName "RemoteCapture Service" `
+					 -Direction Inbound `
+					 -LocalPort 5000 `
+					 -Protocol TCP `
+					 -Action Allow
+```
 
 ## トラブルシューティング
 
-### ❌ エラー: "Service is running in session 0, but active user session is 1"
+### サービスとして実行時にキャプチャが表示されない
 
-このエラーは、Windowsサービスがセッション0（非対話型セッション）で実行されているため、アクティブユーザーセッション（セッション1）の画面をキャプチャできないことを意味します。
+**症状**: サービスは起動しているが、画面が真っ黒または何も表示されない
 
-**根本原因:**
+**原因**:
+- セッション0（システムセッション）で実行されている
+- GDIはセッション0からユーザーデスクトップをキャプチャできない
 
-Windows Graphics Capture APIは、**同一セッション内のデスクトップしかキャプチャできません**。Windowsサービスは、実行アカウントを変更しても常にセッション0で起動されるため、ユーザーセッション（セッション1以降）の画面をキャプチャすることはできません。
+**解決策**:
+1. イベントビューアーでログを確認（Windows ログ → アプリケーション）
+2. ログに以下の警告が出ている場合は、上記の「方法1」または「方法2」を実施：
+   ```
+   WARNING: Running as Windows Service in Session 0. GDI screen capture may not work.
+   ```
 
-**推奨解決策: タスクスケジューラを使用**
+### イベントログの確認
 
-最も確実な方法は、Windowsサービスではなく**タスクスケジューラ**を使用してユーザーログオン時に自動起動する方法です:
-
-1. 既存のサービスを削除します（インストールしている場合）:
+コンソールから：
 ```powershell
-sc.exe stop RemoteCaptureService
-sc.exe delete RemoteCaptureService
+# アプリケーションログを確認
+Get-EventLog -LogName Application -Source ".NET Runtime" -Newest 10 | Where-Object { $_.Message -like "*RemoteCapture*" }
 ```
 
-2. タスクスケジューラでタスクを作成します:
+イベントビューアー：
+1. `Win + R` → `eventvwr.msc`
+2. Windows ログ → アプリケーション
+3. ソース「.NET Runtime」でフィルタ
 
-**方法A: PowerShellコマンドで作成**
+### セッション情報の確認
+
+サービス起動時にログに以下の情報が出力されます：
+- `Starting RemoteCapture Service in Session: [セッションID]`
+- `Is Windows Service: [True/False]`
+
+**セッションIDの意味**:
+- `0`: システムセッション（ユーザーデスクトップをキャプチャ不可）
+- `1以上`: ユーザーセッション（キャプチャ可能）
+
+現在のセッションIDを確認：
 ```powershell
-$action = New-ScheduledTaskAction -Execute "C:\RemoteCaptureService\RemoteCapture.Service.exe"
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
-
-Register-ScheduledTask -TaskName "RemoteCapture" -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+query user
 ```
 
-**方法B: GUIで作成**
-1. タスクスケジューラを開く（`taskschd.msc`）
-2. 「基本タスクの作成」をクリック
-3. 名前: `RemoteCapture`
-4. トリガー: **ログオン時**
-5. 操作: **プログラムの開始**
-6. プログラム: `C:\RemoteCaptureService\RemoteCapture.Service.exe`
-7. タスクのプロパティで以下を設定:
-   - 「最上位の特権で実行する」にチェック
-   - 「ユーザーがログオンしているときのみ実行する」を選択
+## 接続方法
 
-**利点:**
-- ✅ ユーザーセッションで実行されるため、画面キャプチャが正常に動作
-- ✅ ユーザーログオン時に自動起動
-- ✅ サービスと同様にバックグラウンドで動作
+RemoteCapture.Viewerから接続する場合：
 
-**欠点:**
-- ❌ ユーザーがログオフすると停止
-- ❌ ログイン画面のキャプチャは不可能
+1. IPアドレス: サービスが動作しているPCのIPアドレス（または localhost）
+2. ポート番号: 5000
+3. Connectボタンをクリック
 
-### サービスが起動後すぐに終了する
+WebSocket接続URL: `ws://[IPアドレス]:5000/screen`
 
-Windows サービスはデフォルトで「セッション0（非対話型セッション）」で実行されるため、画面キャプチャAPIにアクセスできません。
+## 参考情報
 
-**⚠️ 注意: サービスとしての実行には技術的制限があります**
+この実装は、PowerRemoteDesktopプロジェクトのLogonUIキャプチャ方法を参考にしています：
+https://github.com/PhrozenIO/PowerRemoteDesktop#how-to-capture-logonui
 
-ユーザーアカウントでサービスを作成しても、Windowsサービスは常にセッション0で起動されます。これは回避できないWindowsの仕様です。
-
-**非推奨の回避策（動作保証なし）:**
-
-1. サービスを削除します:
-```powershell
-sc.exe stop RemoteCaptureService
-sc.exe delete RemoteCaptureService
-```
-
-2. 現在のユーザーアカウントでサービスを再作成します:
-```powershell
-sc.exe create RemoteCaptureService binPath="C:\RemoteCaptureService\RemoteCapture.Service.exe" obj=".\ユーザー名" password="パスワード"
-sc.exe start RemoteCaptureService
-```
-
-3. サービスのログファイル（実行ファイルと同じフォルダ）でエラーの詳細を確認してください。
-
-**推奨**: 上記の「タスクスケジューラを使用」する方法を使用してください。
-
-### サービスが起動しない
-
-- Windowsイベントビューアーでエラーログを確認してください
-- サービスのログファイルを確認してください
-- モニターが接続されていることを確認してください
-- ポート番号が他のアプリケーションと競合していないか確認してください
-
-### クライアントが接続できない
-
-- Windowsファイアウォールでポートが開放されているか確認してください
-- サービスが実行中であることを確認してください (`sc.exe query RemoteCaptureService`)
-
-### パフォーマンスが悪い
-
-- `appsettings.json` でフレームレートやJPEG画質を調整してください
-- ネットワーク帯域幅を確認してください

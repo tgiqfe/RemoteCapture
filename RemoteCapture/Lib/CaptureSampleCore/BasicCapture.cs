@@ -217,6 +217,65 @@ namespace RemoteCapture.Lib.CaptureSampleCore
             }
         }
 
+        public byte[] GetCurrentFrameAsJpeg(int quality = 75)
+        {
+            if (_lastFrame == null)
+            {
+                return null;
+            }
+
+            var dataBox = _d3dDevice.ImmediateContext.MapSubresource(
+                _lastFrame,
+                0,
+                SharpDX.Direct3D11.MapMode.Read,
+                SharpDX.Direct3D11.MapFlags.None);
+
+            try
+            {
+                var width = _lastSize.Width;
+                var height = _lastSize.Height;
+                var stride = dataBox.RowPitch;
+
+                using var bitmap = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                var bitmapData = bitmap.LockBits(
+                    new System.Drawing.Rectangle(0, 0, width, height),
+                    System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+                unsafe
+                {
+                    var src = (byte*)dataBox.DataPointer;
+                    var dst = (byte*)bitmapData.Scan0;
+
+                    for (int y = 0; y < height; y++)
+                    {
+                        Buffer.MemoryCopy(
+                            src + y * stride,
+                            dst + y * bitmapData.Stride,
+                            bitmapData.Stride,
+                            width * 4);
+                    }
+                }
+
+                bitmap.UnlockBits(bitmapData);
+
+                using var memoryStream = new MemoryStream();
+                var encoderParameters = new System.Drawing.Imaging.EncoderParameters(1);
+                encoderParameters.Param[0] = new System.Drawing.Imaging.EncoderParameter(
+                    System.Drawing.Imaging.Encoder.Quality, quality);
+
+                var jpegCodec = System.Drawing.Imaging.ImageCodecInfo.GetImageEncoders()
+                    .First(codec => codec.FormatID == System.Drawing.Imaging.ImageFormat.Jpeg.Guid);
+
+                bitmap.Save(memoryStream, jpegCodec, encoderParameters);
+                return memoryStream.ToArray();
+            }
+            finally
+            {
+                _d3dDevice.ImmediateContext.UnmapSubresource(_lastFrame, 0);
+            }
+        }
+
         #region Dispose Pattern
 
         public void Dispose()

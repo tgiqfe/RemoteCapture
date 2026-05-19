@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:RemoteCapture"
         mc:Ignorable="d"
-        Title="Remote Capture - WebSocket Screen Sharing" Height="600" Width="1000"
+        Title="Remote Capture - WebSocket Screen Sharing" Height="800" Width="1000"
         Loaded="Window_Loaded">
     <Grid>
         <TabControl x:Name="MainTabControl">
@@ -36,6 +36,23 @@
                             <Separator Margin="5,15,5,15" />
 
                             <TextBlock Text="WebSocket送信設定" FontWeight="Bold" Margin="5" />
+
+                            <TextBlock Text="圧縮形式:" Margin="5,10,5,5" />
+                            <StackPanel Margin="5,0,5,0">
+                                <RadioButton x:Name="PngRadioButton" Content="PNG (高画質・大容量)" IsChecked="True" 
+                                             GroupName="CompressionFormat" Checked="CompressionFormat_Changed" />
+                                <RadioButton x:Name="JpegRadioButton" Content="JPEG (圧縮・小容量)" 
+                                             GroupName="CompressionFormat" Checked="CompressionFormat_Changed" />
+                            </StackPanel>
+
+                            <TextBlock x:Name="JpegQualityLabel" Text="JPEG品質:" Margin="5,10,5,5" IsEnabled="False" />
+                            <StackPanel Orientation="Horizontal" Margin="5">
+                                <Slider x:Name="JpegQualitySlider" Minimum="10" Maximum="100" Value="75" Width="120" 
+                                        ValueChanged="JpegQualitySlider_ValueChanged" TickFrequency="5" IsSnapToTickEnabled="True" 
+                                        IsEnabled="False" />
+                                <TextBlock x:Name="JpegQualityValueText" Text="75" Margin="10,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+
                             <TextBlock Text="送信FPS:" Margin="5,10,5,5" />
                             <StackPanel Orientation="Horizontal" Margin="5">
                                 <Slider x:Name="FpsSlider" Minimum="1" Maximum="60" Value="30" Width="120" 
@@ -46,8 +63,15 @@
                             <Button x:Name="StartServerButton" Content="サーバー開始" Click="StartServerButton_Click" Margin="5,10,5,5" Background="LightGreen" />
                             <Button x:Name="StopServerButton" Content="サーバー停止" Click="StopServerButton_Click" Margin="5" Background="LightCoral" IsEnabled="False" />
 
+                            <Separator Margin="5,15,5,15" />
+
+                            <CheckBox x:Name="AllowRemoteControlCheckBox" Content="リモート操作を許可" Margin="5" 
+                                      IsEnabled="False" Checked="AllowRemoteControl_Changed" Unchecked="AllowRemoteControl_Changed" />
+
                             <TextBlock Text="接続状態:" FontWeight="Bold" Margin="5,15,5,5" />
                             <TextBlock x:Name="ServerStatusText" Text="停止中" Margin="5" />
+                            <TextBlock Text="サーバーアドレス:" FontWeight="Bold" Margin="5,10,5,5" />
+                            <TextBlock x:Name="ServerAddressDisplay" Text="-" Margin="5" TextWrapping="Wrap" Foreground="Blue" />
                             <TextBlock x:Name="ConnectedClientsText" Text="接続クライアント数: 0 / 4" Margin="5" />
                         </StackPanel>
                         <StackPanel Grid.Row="1">
@@ -83,11 +107,25 @@
                         <TextBlock x:Name="ReceivedFramesText" Text="受信フレーム数: 0" Margin="5" />
                     </StackPanel>
 
-                    <Grid Grid.Column="1" Background="Black">
+                    <Grid x:Name="ReceiverGrid" Grid.Column="1" Background="Black"
+                          MouseEnter="ReceivedImage_MouseEnter"
+                          MouseLeave="ReceivedImage_MouseLeave"
+                          MouseMove="ReceivedImage_MouseMove"
+                          MouseLeftButtonDown="ReceivedImage_MouseLeftButtonDown"
+                          MouseLeftButtonUp="ReceivedImage_MouseLeftButtonUp"
+                          MouseRightButtonDown="ReceivedImage_MouseRightButtonDown"
+                          MouseRightButtonUp="ReceivedImage_MouseRightButtonUp"
+                          MouseWheel="ReceivedImage_MouseWheel"
+                          PreviewMouseDown="ReceivedImage_PreviewMouseDown"
+                          PreviewMouseUp="ReceivedImage_PreviewMouseUp"
+                          PreviewKeyDown="ReceiverGrid_PreviewKeyDown"
+                          PreviewKeyUp="ReceiverGrid_PreviewKeyUp"
+                          PreviewTextInput="ReceiverGrid_PreviewTextInput"
+                          Focusable="True">
                         <Image x:Name="ReceivedImage" Stretch="Uniform" />
                         <TextBlock x:Name="NoImageText" Text="受信待機中..." 
                                    HorizontalAlignment="Center" VerticalAlignment="Center" 
-                                   Foreground="White" FontSize="20" />
+                                   Foreground="White" FontSize="20" IsHitTestVisible="False" />
                     </Grid>
                 </Grid>
             </TabItem>

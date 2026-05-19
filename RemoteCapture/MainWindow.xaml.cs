@@ -4,6 +4,8 @@ using RemoteCapture.Lib.WindowsRuntimeHelpers;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Numerics;
 using System.Windows;
 using System.Windows.Controls;
@@ -12,6 +14,7 @@ using System.Windows.Threading;
 using Windows.Foundation.Metadata;
 using Windows.Graphics.Capture;
 using Windows.UI.Composition;
+using RemoteCapture.Lib;
 
 namespace RemoteCapture
 {
@@ -35,10 +38,18 @@ namespace RemoteCapture
         private DispatcherTimer broadcastTimer;
         private int currentFps = 30;
         private int receivedFrameCount = 0;
+        private bool useJpegCompression = false;
+        private int jpegQuality = 75;
+        private bool allowRemoteControl = false;
+        private int captureScreenWidth = 0;
+        private int captureScreenHeight = 0;
 
         public MainWindow()
         {
             InitializeComponent();
+
+            Logger.Info("Application started");
+            Logger.Info($"Log file: {Logger.GetLogFilePath()}");
 
 #if DEBUG
             // Force graphicscapture.dll to load.
@@ -255,8 +266,11 @@ namespace RemoteCapture
         {
             try
             {
+                Logger.Info("Starting WebSocket Server...");
                 webSocketServer = new Lib.WebSocket.WebSocketServer(8080, 4);
                 webSocketServer.ClientCountChanged += WebSocketServer_ClientCountChanged;
+                webSocketServer.MouseEventReceived += WebSocketServer_MouseEventReceived;
+                webSocketServer.KeyboardEventReceived += WebSocketServer_KeyboardEventReceived;
                 await webSocketServer.StartAsync();
 
                 broadcastTimer = new DispatcherTimer();
@@ -264,13 +278,20 @@ namespace RemoteCapture
                 broadcastTimer.Tick += BroadcastTimer_Tick;
                 broadcastTimer.Start();
 
-                ServerStatusText.Text = "サーバー実行中 (ws://localhost:8080/)";
+                var ipAddresses = GetLocalIPAddresses();
+                var addressList = string.Join("\n", ipAddresses.Select(ip => $"ws://{ip}:8080/"));
+
+                Logger.Info($"WebSocket Server started. Addresses:\n{addressList}");
+                ServerStatusText.Text = "サーバー実行中";
+                ServerAddressDisplay.Text = addressList;
                 StartServerButton.IsEnabled = false;
                 StopServerButton.IsEnabled = true;
+                AllowRemoteControlCheckBox.IsEnabled = true;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"サーバー起動エラー:\n{ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+                Logger.Error("Server start failed", ex);
+                MessageBox.Show($"サーバー起動エラー:\n{ex.Message}\n\n管理者権限で実行してください。", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -286,9 +307,37 @@ namespace RemoteCapture
             webSocketServer = null;
 
             ServerStatusText.Text = "停止中";
+            ServerAddressDisplay.Text = "-";
             ConnectedClientsText.Text = "接続クライアント数: 0 / 4";
             StartServerButton.IsEnabled = true;
             StopServerButton.IsEnabled = false;
+            AllowRemoteControlCheckBox.IsEnabled = false;
+            AllowRemoteControlCheckBox.IsChecked = false;
+            allowRemoteControl = false;
+        }
+
+        private List<string> GetLocalIPAddresses()
+        {
+            var ipAddresses = new List<string>();
+            try
+            {
+                var host = Dns.GetHostEntry(Dns.GetHostName());
+                foreach (var ip in host.AddressList)
+                {
+                    if (ip.AddressFamily == AddressFamily.InterNetwork)
+                    {
+                        ipAddresses.Add(ip.ToString());
+                    }
+                }
+            }
+            catch { }
+
+            if (ipAddresses.Count == 0)
+            {
+                ipAddresses.Add("localhost");
+            }
+
+            return ipAddresses;
         }
 
         private async void BroadcastTimer_Tick(object sender, EventArgs e)
@@ -297,7 +346,10 @@ namespace RemoteCapture
             {
                 try
                 {
-                    var frameData = sample.GetCurrentFrameAsPng();
+                    byte[] frameData = useJpegCompression 
+                        ? sample.GetCurrentFrameAsJpeg(jpegQuality)
+                        : sample.GetCurrentFrameAsPng();
+
                     if (frameData != null)
                     {
                         await webSocketServer.BroadcastImageAsync(frameData);
@@ -332,6 +384,90 @@ namespace RemoteCapture
             }
         }
 
+        private void CompressionFormat_Changed(object sender, RoutedEventArgs e)
+        {
+            if (JpegRadioButton != null && JpegQualitySlider != null && JpegQualityLabel != null)
+            {
+                useJpegCompression = JpegRadioButton.IsChecked == true;
+                JpegQualitySlider.IsEnabled = useJpegCompression;
+                JpegQualityLabel.IsEnabled = useJpegCompression;
+            }
+        }
+
+        private void JpegQualitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            jpegQuality = (int)e.NewValue;
+            if (JpegQualityValueText != null)
+            {
+                JpegQualityValueText.Text = jpegQuality.ToString();
+            }
+        }
+
+        private void AllowRemoteControl_Changed(object sender, RoutedEventArgs e)
+        {
+            allowRemoteControl = AllowRemoteControlCheckBox.IsChecked == true;
+        }
+
+        private void WebSocketServer_MouseEventReceived(object sender, Lib.WebSocket.MouseEventMessage e)
+        {
+            Logger.Debug($"MouseEventReceived - EventType: {e.EventType}, AllowRemoteControl: {allowRemoteControl}");
+
+            if (!allowRemoteControl)
+            {
+                Logger.Warning("Remote control is NOT allowed - skipping mouse event");
+                return;
+            }
+
+            Dispatcher.Invoke(() =>
+            {
+                try
+                {
+                    Lib.WebSocket.MouseSimulator.ExecuteMouseEvent(e);
+                    // Log for mouse move events (reduced frequency)
+                    if (e.EventType == Lib.WebSocket.MouseEventType.Move)
+                    {
+                        int screenX = (int)(e.NormalizedX * e.ScreenWidth);
+                        int screenY = (int)(e.NormalizedY * e.ScreenHeight);
+                        Logger.Debug($"Mouse Move executed: ({screenX}, {screenY})");
+                    }
+                    else
+                    {
+                        int screenX = (int)(e.NormalizedX * e.ScreenWidth);
+                        int screenY = (int)(e.NormalizedY * e.ScreenHeight);
+                        Logger.Info($"Mouse {e.EventType} executed: ({screenX}, {screenY})");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Mouse event execution error", ex);
+                }
+            });
+        }
+
+        private void WebSocketServer_KeyboardEventReceived(object sender, Lib.WebSocket.KeyboardEventMessage e)
+        {
+            Logger.Debug($"KeyboardEventReceived - EventType: {e.EventType}, KeyCode: {e.KeyCode}, AllowRemoteControl: {allowRemoteControl}");
+
+            if (!allowRemoteControl)
+            {
+                Logger.Warning("Remote control is NOT allowed - skipping keyboard event");
+                return;
+            }
+
+            Dispatcher.Invoke(() =>
+            {
+                try
+                {
+                    Lib.WebSocket.KeyboardSimulator.ExecuteKeyboardEvent(e);
+                    Logger.Info($"Keyboard {e.EventType} executed: KeyCode={e.KeyCode}");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Keyboard event execution error", ex);
+                }
+            });
+        }
+
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
@@ -351,6 +487,7 @@ namespace RemoteCapture
 
             try
             {
+                Logger.Info($"Connecting to WebSocket Server: {serverAddress}");
                 webSocketClient = new Lib.WebSocket.WebSocketClient();
                 webSocketClient.ImageReceived += WebSocketClient_ImageReceived;
                 webSocketClient.Connected += WebSocketClient_Connected;
@@ -363,6 +500,7 @@ namespace RemoteCapture
             }
             catch (Exception ex)
             {
+                Logger.Error("Connection failed", ex);
                 MessageBox.Show($"接続エラー:\n{ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
                 webSocketClient?.Dispose();
                 webSocketClient = null;
@@ -371,6 +509,7 @@ namespace RemoteCapture
 
         private async void DisconnectButton_Click(object sender, RoutedEventArgs e)
         {
+            Logger.Info("Disconnecting from WebSocket Server");
             if (webSocketClient != null)
             {
                 await webSocketClient.DisconnectAsync();
@@ -390,6 +529,10 @@ namespace RemoteCapture
                 NoImageText.Visibility = Visibility.Collapsed;
                 receivedFrameCount++;
                 ReceivedFramesText.Text = $"受信フレーム数: {receivedFrameCount}";
+
+                // Store screen size for coordinate conversion
+                captureScreenWidth = e.PixelWidth;
+                captureScreenHeight = e.PixelHeight;
             });
         }
 
@@ -412,6 +555,264 @@ namespace RemoteCapture
                 DisconnectButton.IsEnabled = false;
                 NoImageText.Visibility = Visibility.Visible;
             });
+        }
+
+        // Mouse event handlers for receiver side
+        private void ReceivedImage_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            // Capture mouse when entering the image area to track all mouse movements
+            if (webSocketClient != null && webSocketClient.IsConnected)
+            {
+                var grid = sender as Grid;
+                if (grid != null)
+                {
+                    grid.CaptureMouse();
+                    grid.Focus();
+
+                    // Disable IME on the ReceiverGrid to prevent local IME input
+                    System.Windows.Input.InputMethod.SetIsInputMethodEnabled(grid, false);
+                }
+            }
+        }
+
+        private void ReceivedImage_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            // Always release mouse capture when leaving the Grid area
+            var grid = sender as Grid;
+            if (grid != null && grid.IsMouseCaptured)
+            {
+                grid.ReleaseMouseCapture();
+                Logger.Debug("Mouse capture released - left Grid area");
+            }
+        }
+
+        private async void ReceivedImage_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            var grid = sender as Grid;
+            if (grid != null && grid.IsMouseCaptured)
+            {
+                // Check if mouse is outside the Grid bounds
+                var position = e.GetPosition(grid);
+                var isOutside = position.X < 0 || position.Y < 0 || 
+                                position.X > grid.ActualWidth || position.Y > grid.ActualHeight;
+
+                if (isOutside)
+                {
+                    grid.ReleaseMouseCapture();
+                    Logger.Debug($"Mouse capture released - outside Grid bounds: ({position.X:F0}, {position.Y:F0})");
+                    return; // Don't send mouse event if outside
+                }
+            }
+
+            await SendMouseEventAsync(Lib.WebSocket.MouseEventType.Move, e);
+        }
+
+        private async void ReceivedImage_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            // Ensure mouse is captured for drag operations
+            var grid = sender as Grid;
+            grid?.CaptureMouse();
+            await SendMouseEventAsync(Lib.WebSocket.MouseEventType.LeftDown, e);
+        }
+
+        private async void ReceivedImage_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            await SendMouseEventAsync(Lib.WebSocket.MouseEventType.LeftUp, e);
+        }
+
+        private async void ReceivedImage_MouseRightButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            // Ensure mouse is captured for drag operations
+            var grid = sender as Grid;
+            grid?.CaptureMouse();
+            await SendMouseEventAsync(Lib.WebSocket.MouseEventType.RightDown, e);
+        }
+
+        private async void ReceivedImage_MouseRightButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            await SendMouseEventAsync(Lib.WebSocket.MouseEventType.RightUp, e);
+        }
+
+        private async void ReceivedImage_MouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+        {
+            await SendMouseWheelEventAsync(e);
+        }
+
+        private async void ReceivedImage_PreviewMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton == System.Windows.Input.MouseButton.Middle)
+            {
+                var grid = sender as Grid;
+                grid?.CaptureMouse();
+                await SendMouseEventAsync(Lib.WebSocket.MouseEventType.MiddleDown, e);
+                e.Handled = true;
+            }
+        }
+
+        private async void ReceivedImage_PreviewMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton == System.Windows.Input.MouseButton.Middle)
+            {
+                await SendMouseEventAsync(Lib.WebSocket.MouseEventType.MiddleUp, e);
+                e.Handled = true;
+            }
+        }
+
+        private async Task SendMouseEventAsync(Lib.WebSocket.MouseEventType eventType, System.Windows.Input.MouseEventArgs e)
+        {
+            if (webSocketClient == null || !webSocketClient.IsConnected || captureScreenWidth == 0 || captureScreenHeight == 0)
+                return;
+
+            var position = e.GetPosition(ReceivedImage);
+            var imageWidth = ReceivedImage.ActualWidth;
+            var imageHeight = ReceivedImage.ActualHeight;
+
+            if (imageWidth == 0 || imageHeight == 0)
+                return;
+
+            // Calculate normalized coordinates (0.0 - 1.0)
+            var normalizedX = position.X / imageWidth;
+            var normalizedY = position.Y / imageHeight;
+
+            // Clamp to valid range
+            normalizedX = Math.Max(0.0, Math.Min(1.0, normalizedX));
+            normalizedY = Math.Max(0.0, Math.Min(1.0, normalizedY));
+
+            var mouseEvent = new Lib.WebSocket.MouseEventMessage
+            {
+                EventType = eventType,
+                NormalizedX = normalizedX,
+                NormalizedY = normalizedY,
+                ScreenWidth = captureScreenWidth,
+                ScreenHeight = captureScreenHeight
+            };
+
+            // Log for mouse events (reduced frequency for Move events)
+            if (eventType == Lib.WebSocket.MouseEventType.Move)
+            {
+                int screenX = (int)(normalizedX * captureScreenWidth);
+                int screenY = (int)(normalizedY * captureScreenHeight);
+                Logger.Debug($"Sending Mouse Move: ({screenX}, {screenY}) - Normalized: ({normalizedX:F3}, {normalizedY:F3})");
+            }
+            else
+            {
+                int screenX = (int)(normalizedX * captureScreenWidth);
+                int screenY = (int)(normalizedY * captureScreenHeight);
+                Logger.Info($"Sending Mouse {eventType}: ({screenX}, {screenY})");
+            }
+
+            await webSocketClient.SendMouseEventAsync(mouseEvent);
+        }
+
+        private async Task SendMouseWheelEventAsync(System.Windows.Input.MouseWheelEventArgs e)
+        {
+            if (webSocketClient == null || !webSocketClient.IsConnected || captureScreenWidth == 0 || captureScreenHeight == 0)
+                return;
+
+            var position = e.GetPosition(ReceivedImage);
+            var imageWidth = ReceivedImage.ActualWidth;
+            var imageHeight = ReceivedImage.ActualHeight;
+
+            if (imageWidth == 0 || imageHeight == 0)
+                return;
+
+            // Calculate normalized coordinates (0.0 - 1.0)
+            var normalizedX = position.X / imageWidth;
+            var normalizedY = position.Y / imageHeight;
+
+            // Clamp to valid range
+            normalizedX = Math.Max(0.0, Math.Min(1.0, normalizedX));
+            normalizedY = Math.Max(0.0, Math.Min(1.0, normalizedY));
+
+            var mouseEvent = new Lib.WebSocket.MouseEventMessage
+            {
+                EventType = Lib.WebSocket.MouseEventType.WheelScroll,
+                NormalizedX = normalizedX,
+                NormalizedY = normalizedY,
+                ScreenWidth = captureScreenWidth,
+                ScreenHeight = captureScreenHeight,
+                WheelDelta = e.Delta
+            };
+
+            int screenX = (int)(normalizedX * captureScreenWidth);
+            int screenY = (int)(normalizedY * captureScreenHeight);
+            Logger.Info($"Sending Mouse Wheel: Delta={e.Delta} at ({screenX}, {screenY})");
+
+            await webSocketClient.SendMouseEventAsync(mouseEvent);
+        }
+
+        // Keyboard event handlers
+        private async void ReceiverGrid_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            // Only send keyboard events when connected
+            if (webSocketClient == null || !webSocketClient.IsConnected)
+                return;
+
+            // Don't send repeated key events
+            if (e.IsRepeat)
+            {
+                e.Handled = true;
+                return;
+            }
+
+            // Get the actual key (handle IME keys specially)
+            var key = e.Key == System.Windows.Input.Key.ImeProcessed ? e.ImeProcessedKey : e.Key;
+
+            var keyboardEvent = new Lib.WebSocket.KeyboardEventMessage
+            {
+                EventType = Lib.WebSocket.KeyboardEventType.KeyDown,
+                KeyCode = System.Windows.Input.KeyInterop.VirtualKeyFromKey(key),
+                IsShiftPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftShift) ||
+                                 System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightShift),
+                IsCtrlPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftCtrl) ||
+                                System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightCtrl),
+                IsAltPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftAlt) ||
+                               System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightAlt),
+                IsWinPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LWin) ||
+                               System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RWin)
+            };
+
+            await webSocketClient.SendKeyboardEventAsync(keyboardEvent);
+            Logger.Info($"Sending Keyboard KeyDown: KeyCode={keyboardEvent.KeyCode} Key={e.Key} ImeProcessedKey={e.ImeProcessedKey} ActualKey={key}");
+
+            // Prevent the key from being processed locally
+            e.Handled = true;
+        }
+
+        private async void ReceiverGrid_PreviewKeyUp(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            // Only send keyboard events when connected
+            if (webSocketClient == null || !webSocketClient.IsConnected)
+                return;
+
+            // Get the actual key (handle IME keys specially)
+            var key = e.Key == System.Windows.Input.Key.ImeProcessed ? e.ImeProcessedKey : e.Key;
+
+            var keyboardEvent = new Lib.WebSocket.KeyboardEventMessage
+            {
+                EventType = Lib.WebSocket.KeyboardEventType.KeyUp,
+                KeyCode = System.Windows.Input.KeyInterop.VirtualKeyFromKey(key),
+                IsShiftPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftShift) ||
+                                 System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightShift),
+                IsCtrlPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftCtrl) ||
+                                System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightCtrl),
+                IsAltPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LeftAlt) ||
+                               System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RightAlt),
+                IsWinPressed = System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.LWin) ||
+                               System.Windows.Input.Keyboard.IsKeyDown(System.Windows.Input.Key.RWin)
+            };
+
+            await webSocketClient.SendKeyboardEventAsync(keyboardEvent);
+            Logger.Info($"Sending Keyboard KeyUp: KeyCode={keyboardEvent.KeyCode} Key={e.Key} ImeProcessedKey={e.ImeProcessedKey} ActualKey={key}");
+
+            // Prevent the key from being processed locally
+            e.Handled = true;
+        }
+
+        private void ReceiverGrid_PreviewTextInput(object sender, System.Windows.Input.TextCompositionEventArgs e)
+        {
+            // Prevent all text input on the receiver grid
+            e.Handled = true;
         }
     }
 }

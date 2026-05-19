@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,6 +20,8 @@ namespace RemoteCapture.Lib.WebSocket
         private bool _isRunning;
 
         public event EventHandler<int> ClientCountChanged;
+        public event EventHandler<MouseEventMessage> MouseEventReceived;
+        public event EventHandler<KeyboardEventMessage> KeyboardEventReceived;
 
         public int ConnectedClientCount => _clients.Count;
         public bool IsRunning => _isRunning;
@@ -35,13 +38,16 @@ namespace RemoteCapture.Lib.WebSocket
             if (_isRunning)
                 return;
 
+            RemoteCapture.Lib.Logger.Info($"WebSocketServer starting on port {_port}");
             _httpListener = new HttpListener();
-            _httpListener.Prefixes.Add($"http://localhost:{_port}/");
+            _httpListener.Prefixes.Add($"http://+:{_port}/");
             _httpListener.Start();
             _isRunning = true;
 
             _cancellationTokenSource = new CancellationTokenSource();
             var token = _cancellationTokenSource.Token;
+
+            RemoteCapture.Lib.Logger.Info("WebSocketServer started successfully");
 
             _ = Task.Run(async () =>
             {
@@ -72,6 +78,7 @@ namespace RemoteCapture.Lib.WebSocket
         {
             if (_clients.Count >= _maxClients)
             {
+                RemoteCapture.Lib.Logger.Warning($"Max clients ({_maxClients}) reached. Rejecting connection.");
                 context.Response.StatusCode = 503; // Service Unavailable
                 context.Response.Close();
                 return;
@@ -86,17 +93,75 @@ namespace RemoteCapture.Lib.WebSocket
 
                 _clients.TryAdd(clientId, webSocket);
                 ClientCountChanged?.Invoke(this, _clients.Count);
+                RemoteCapture.Lib.Logger.Info($"Client connected: {clientId}. Total clients: {_clients.Count}");
 
-                var buffer = new byte[1024];
+                var buffer = new byte[1024 * 64]; // Increased buffer for text messages
+                var messageStream = new MemoryStream();
+
                 while (webSocket.State == WebSocketState.Open && !token.IsCancellationRequested)
                 {
                     try
                     {
-                        var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), token);
-                        if (result.MessageType == WebSocketMessageType.Close)
+                        messageStream.SetLength(0);
+                        WebSocketReceiveResult result;
+
+                        do
                         {
-                            await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", token);
-                            break;
+                            var segment = new ArraySegment<byte>(buffer);
+                            result = await webSocket.ReceiveAsync(segment, token);
+
+                            if (result.MessageType == WebSocketMessageType.Close)
+                            {
+                                await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", token);
+                                break;
+                            }
+
+                            messageStream.Write(buffer, 0, result.Count);
+                        }
+                        while (!result.EndOfMessage);
+
+                        if (result.MessageType == WebSocketMessageType.Text && messageStream.Length > 0)
+                        {
+                            var messageBytes = messageStream.ToArray();
+                            var messageText = Encoding.UTF8.GetString(messageBytes);
+
+                            RemoteCapture.Lib.Logger.Debug($"WebSocketServer received text message: {messageText.Substring(0, Math.Min(100, messageText.Length))}...");
+
+                            // Check if message contains KeyCode (keyboard event) or NormalizedX (mouse event)
+                            if (messageText.Contains("\"KeyCode\""))
+                            {
+                                // This is a keyboard event
+                                try
+                                {
+                                    var keyboardEvent = JsonSerializer.Deserialize<KeyboardEventMessage>(messageText);
+                                    if (keyboardEvent != null)
+                                    {
+                                        RemoteCapture.Lib.Logger.Debug($"Deserialized KeyboardEvent: {keyboardEvent.EventType}, KeyCode={keyboardEvent.KeyCode}");
+                                        KeyboardEventReceived?.Invoke(this, keyboardEvent);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    RemoteCapture.Lib.Logger.Warning($"Failed to deserialize as KeyboardEvent: {ex.Message}");
+                                }
+                            }
+                            else if (messageText.Contains("\"NormalizedX\""))
+                            {
+                                // This is a mouse event
+                                try
+                                {
+                                    var mouseEvent = JsonSerializer.Deserialize<MouseEventMessage>(messageText);
+                                    if (mouseEvent != null)
+                                    {
+                                        RemoteCapture.Lib.Logger.Debug($"Deserialized MouseEvent: {mouseEvent.EventType}");
+                                        MouseEventReceived?.Invoke(this, mouseEvent);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    RemoteCapture.Lib.Logger.Warning($"Failed to deserialize as MouseEvent: {ex.Message}");
+                                }
+                            }
                         }
                     }
                     catch

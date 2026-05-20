@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="RemoteCapture.Service/RemoteCapture.Service.csproj" />
+  <Project Path="RemoteCapture.Viewer/RemoteCapture.Viewer.csproj" />
+  <Project Path="RemoteCapture/RemoteCapture.csproj" />
+</Solution>
